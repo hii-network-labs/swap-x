@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
@@ -23,6 +23,8 @@ const fetchPriceHistory = async (tokenId: string, days: string) => {
 
 export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
   const [timeRange, setTimeRange] = useState<TimeRange>("7");
+  const [isPriceIncreasing, setIsPriceIncreasing] = useState<boolean | null>(null);
+  const previousRateRef = useRef<number | null>(null);
 
   const { data: fromData, isLoading: fromLoading } = useQuery({
     queryKey: ['priceHistory', fromToken?.coingeckoId, timeRange],
@@ -71,6 +73,14 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
   const firstRate = chartData.length > 0 ? chartData[0].rate : 0;
   const priceChange = firstRate > 0 ? ((currentRate - firstRate) / firstRate) * 100 : 0;
 
+  // Track price changes for color animation
+  useEffect(() => {
+    if (currentRate > 0 && previousRateRef.current !== null) {
+      setIsPriceIncreasing(currentRate > previousRateRef.current);
+    }
+    previousRateRef.current = currentRate;
+  }, [currentRate]);
+
   return (
     <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass space-y-4">
       <div className="flex items-center justify-between">
@@ -80,10 +90,19 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
           </h3>
           {!isLoading && chartData.length > 0 && (
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-2xl font-bold">
+              <span 
+                className={`text-2xl font-bold transition-all duration-500 ${
+                  isPriceIncreasing === true ? 'text-green-500 animate-pulse' : 
+                  isPriceIncreasing === false ? 'text-red-500 animate-pulse' : ''
+                }`}
+              >
                 {currentRate.toFixed(6)}
               </span>
-              <span className={`text-sm font-medium ${priceChange >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+              <span 
+                className={`text-sm font-medium transition-colors duration-300 ${
+                  priceChange >= 0 ? 'text-green-500' : 'text-red-500'
+                }`}
+              >
                 {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
               </span>
             </div>
@@ -147,10 +166,15 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
             <Line
               type="monotone"
               dataKey="rate"
-              stroke="hsl(var(--primary))"
+              stroke={priceChange >= 0 ? "hsl(142, 76%, 36%)" : "hsl(0, 84%, 60%)"}
               strokeWidth={2}
               dot={false}
-              activeDot={{ r: 4 }}
+              activeDot={{ 
+                r: 6, 
+                fill: priceChange >= 0 ? "hsl(142, 76%, 36%)" : "hsl(0, 84%, 60%)",
+                className: "animate-pulse"
+              }}
+              className="transition-all duration-500"
             />
           </LineChart>
         </ResponsiveContainer>
