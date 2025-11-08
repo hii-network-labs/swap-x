@@ -7,6 +7,7 @@ import { Header } from "./components/Layout/Header";
 import { NetworkProvider } from "./contexts/NetworkContext";
 import Swap from "./pages/Swap";
 import Pools from "./pages/Pools";
+import MyPositions from "./pages/MyPositions";
 import History from "./pages/History";
 import NotFound from "./pages/NotFound";
 
@@ -23,6 +24,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Swap />} />
             <Route path="/pools" element={<Pools />} />
+            <Route path="/positions" element={<MyPositions />} />
             <Route path="/history" element={<History />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
