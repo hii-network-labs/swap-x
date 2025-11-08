@@ -1,4 +1,5 @@
 import { Token } from "@/components/Swap/TokenSelector";
+import { fetchTokenInfo, isValidERC20 } from "@/utils/erc20";
 
 interface ChainTokenList {
   [chainId: number]: Token[];
@@ -77,12 +78,13 @@ export const getTokensForNetwork = async (chainId: number): Promise<Token[]> => 
 };
 
 /**
- * Search for a token by address across all networks
- * This would typically call blockchain explorer APIs
+ * Search for a token by address using ERC20 contract methods
+ * Fetches token info directly from blockchain
  */
 export const searchTokenByAddress = async (
   address: string,
-  chainId: number
+  chainId: number,
+  rpcUrl: string
 ): Promise<Token | null> => {
   try {
     // Validate address format
@@ -90,22 +92,21 @@ export const searchTokenByAddress = async (
       return null;
     }
 
-    // For now, check in our default lists
-    const tokens = DEFAULT_TOKENS[chainId] || [];
-    const found = tokens.find(
-      (token) => token.address.toLowerCase() === address.toLowerCase()
-    );
-
-    if (found) {
-      return found;
+    // Check if it's a valid ERC20 contract
+    const isValid = await isValidERC20(address, rpcUrl);
+    if (!isValid) {
+      console.log("Address is not a valid ERC20 token");
+      return null;
     }
 
-    // In production, this would call explorer APIs:
-    // - Etherscan API: https://api.etherscan.io/api?module=token&action=tokeninfo
-    // - BSCScan API: https://api.bscscan.com/api?module=token&action=tokeninfo
-    // Note: These require API keys for higher rate limits
+    // Fetch token information using ERC20 methods
+    const tokenInfo = await fetchTokenInfo(address, rpcUrl, chainId);
+    
+    if (tokenInfo) {
+      console.log("Token found:", tokenInfo);
+    }
 
-    return null;
+    return tokenInfo;
   } catch (error) {
     console.error("Error searching token by address:", error);
     return null;

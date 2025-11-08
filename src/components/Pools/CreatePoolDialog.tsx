@@ -84,7 +84,11 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
       if (searchQuery.match(/^0x[a-fA-F0-9]{40}$/)) {
         setIsSearchingAddress(true);
         try {
-          const foundToken = await searchTokenByAddress(searchQuery, currentNetwork.chainId);
+          const foundToken = await searchTokenByAddress(
+            searchQuery, 
+            currentNetwork.chainId,
+            currentNetwork.rpcUrl
+          );
           if (foundToken) {
             // Add to list if not already present
             setAvailableTokens((prev) => {
@@ -93,23 +97,33 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
               );
               return exists ? prev : [foundToken, ...prev];
             });
+            toast({
+              title: "Token tìm thấy!",
+              description: `${foundToken.symbol} - ${foundToken.name}`,
+            });
           } else {
             toast({
-              title: "Token không tìm thấy",
-              description: "Không tìm thấy token với địa chỉ này trên mạng hiện tại.",
+              title: "Token không hợp lệ",
+              description: "Không tìm thấy token ERC20 với địa chỉ này trên mạng hiện tại.",
+              variant: "destructive",
             });
           }
         } catch (error) {
           console.error("Error searching token:", error);
+          toast({
+            title: "Lỗi tìm kiếm",
+            description: "Có lỗi xảy ra khi tìm kiếm token. Vui lòng thử lại.",
+            variant: "destructive",
+          });
         } finally {
           setIsSearchingAddress(false);
         }
       }
     };
 
-    const timeoutId = setTimeout(searchAddress, 500);
+    const timeoutId = setTimeout(searchAddress, 800);
     return () => clearTimeout(timeoutId);
-  }, [searchQuery, currentNetwork.chainId]);
+  }, [searchQuery, currentNetwork.chainId, currentNetwork.rpcUrl]);
 
   const filteredTokens = availableTokens.filter(t =>
     t.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
