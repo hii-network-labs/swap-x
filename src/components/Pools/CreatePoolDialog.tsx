@@ -261,7 +261,16 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
   const [isCustomFee, setIsCustomFee] = useState(false);
   const [customFeeError, setCustomFeeError] = useState<string | null>(null);
   const [feeSearch, setFeeSearch] = useState("");
+  
+  // Step 2 states
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [amount1, setAmount1] = useState("");
+  const [amount2, setAmount2] = useState("");
+  const [priceRangeError, setPriceRangeError] = useState<string | null>(null);
+  
   const { currentNetwork } = useNetwork();
+  const { toast } = useToast();
 
   const validateCustomFee = (value: string): boolean => {
     setCustomFeeError(null);
@@ -323,6 +332,35 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     setSelectedFee(null);
   };
 
+  const validatePriceRange = () => {
+    setPriceRangeError(null);
+    
+    if (!minPrice || !maxPrice) {
+      setPriceRangeError("Vui lòng nhập cả giá min và max");
+      return false;
+    }
+    
+    const min = parseFloat(minPrice);
+    const max = parseFloat(maxPrice);
+    
+    if (isNaN(min) || isNaN(max)) {
+      setPriceRangeError("Giá trị không hợp lệ");
+      return false;
+    }
+    
+    if (min <= 0 || max <= 0) {
+      setPriceRangeError("Giá phải lớn hơn 0");
+      return false;
+    }
+    
+    if (min >= max) {
+      setPriceRangeError("Giá Min phải nhỏ hơn giá Max");
+      return false;
+    }
+    
+    return true;
+  };
+
   const handleClose = () => {
     setStep(1);
     setToken1(null);
@@ -332,20 +370,73 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     setIsCustomFee(false);
     setCustomFeeError(null);
     setFeeSearch("");
+    setMinPrice("");
+    setMaxPrice("");
+    setAmount1("");
+    setAmount2("");
+    setPriceRangeError(null);
     onOpenChange(false);
   };
 
   const canContinueStep1 = token1 && token2 && token1.address !== token2.address && selectedFee !== null && !customFeeError;
-  const canContinueStep2 = selectedFee !== null;
+  const canContinueStep2 = amount1 && amount2 && validatePriceRange();
 
   const handleContinue = () => {
     if (step === 1 && canContinueStep1) {
       setStep(2);
-    } else if (step === 2 && canContinueStep2) {
-      // TODO: Implement pool creation logic
-      console.log("Creating pool:", { token1, token2, fee: selectedFee });
+    } else if (step === 2) {
+      if (!validatePriceRange()) {
+        toast({
+          title: "Lỗi khoảng giá",
+          description: priceRangeError || "Vui lòng kiểm tra lại khoảng giá",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      if (!amount1 || !amount2) {
+        toast({
+          title: "Lỗi số lượng",
+          description: "Vui lòng nhập số lượng cho cả 2 tokens",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      // TODO: Implement actual pool creation logic
+      console.log("Creating pool:", { 
+        token1, 
+        token2, 
+        fee: selectedFee,
+        minPrice,
+        maxPrice,
+        amount1,
+        amount2
+      });
+      
+      toast({
+        title: "Tạo pool thành công!",
+        description: `Pool ${token1?.symbol}/${token2?.symbol} đã được tạo`,
+      });
+      
       handleClose();
     }
+  };
+
+  const handleBack = () => {
+    if (step === 2) {
+      setStep(1);
+    }
+  };
+
+  // Calculate current price (mock - would come from pool data)
+  const currentPrice = token1 && token2 ? "1.0" : "0";
+  
+  // Calculate estimated liquidity shares (simplified calculation)
+  const calculateLiquidity = () => {
+    if (!amount1 || !amount2 || !minPrice || !maxPrice) return "0";
+    const avg = (parseFloat(amount1) * parseFloat(amount2)) ** 0.5;
+    return avg.toFixed(6);
   };
 
   return (
@@ -512,8 +603,9 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
 
           {step === 2 && (
             <div className="space-y-6">
+              {/* Pool Info Summary */}
               <div className="p-4 rounded-lg bg-muted/30 border border-glass">
-                <h3 className="font-semibold mb-2">Thông tin pool</h3>
+                <h3 className="font-semibold mb-3">Thông tin pool</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Cặp:</span>
@@ -523,22 +615,217 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     <span className="text-muted-foreground">Phí:</span>
                     <span className="font-medium">{selectedFee}</span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Giá hiện tại:</span>
+                    <span className="font-medium">
+                      {currentPrice} {token2?.symbol}/{token1?.symbol}
+                    </span>
+                  </div>
                 </div>
               </div>
-              <div className="text-center text-muted-foreground">
-                <p>Tính năng này đang được phát triển</p>
+
+              {/* Price Range */}
+              <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-glass">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">Đặt khoảng giá</h3>
+                  <Badge variant="outline" className="border-glass text-xs">
+                    {token2?.symbol}/{token1?.symbol}
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Thanh khoản của bạn sẽ hoạt động trong khoảng giá này. Giá ngoài khoảng này sẽ không được sử dụng.
+                </p>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Giá Min</Label>
+                    <div className="relative">
+                      <Input
+                        type="text"
+                        placeholder="0.0"
+                        value={minPrice}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/[^\d.]/g, '');
+                          setMinPrice(value);
+                          setPriceRangeError(null);
+                        }}
+                        className="bg-background border-glass pr-16"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">
+                        {token2?.symbol}/{token1?.symbol}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label>Giá Max</Label>
+                    <div className="relative">
+                      <Input
+                        type="text"
+                        placeholder="0.0"
+                        value={maxPrice}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/[^\d.]/g, '');
+                          setMaxPrice(value);
+                          setPriceRangeError(null);
+                        }}
+                        className="bg-background border-glass pr-16"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">
+                        {token2?.symbol}/{token1?.symbol}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                {priceRangeError && (
+                  <p className="text-xs text-destructive">{priceRangeError}</p>
+                )}
+                
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setMinPrice("0.5");
+                      setMaxPrice("2.0");
+                    }}
+                    className="flex-1 border-glass"
+                  >
+                    Khoảng hẹp
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setMinPrice("0.1");
+                      setMaxPrice("10.0");
+                    }}
+                    className="flex-1 border-glass"
+                  >
+                    Khoảng rộng
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setMinPrice("0");
+                      setMaxPrice("999999");
+                    }}
+                    className="flex-1 border-glass"
+                  >
+                    Toàn bộ
+                  </Button>
+                </div>
+              </div>
+
+              {/* Deposit Amounts */}
+              <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-glass">
+                <h3 className="font-semibold">Số lượng nạp</h3>
+                <p className="text-sm text-muted-foreground">
+                  Nhập số lượng token bạn muốn thêm vào pool
+                </p>
+                
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>{token1?.symbol}</Label>
+                      <span className="text-xs text-muted-foreground">Balance: 0.0</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="0.0"
+                        value={amount1}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/[^\d.]/g, '');
+                          setAmount1(value);
+                        }}
+                        className="flex-1 bg-background border-glass"
+                      />
+                      <Button variant="outline" size="sm" className="border-glass">
+                        MAX
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>{token2?.symbol}</Label>
+                      <span className="text-xs text-muted-foreground">Balance: 0.0</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="0.0"
+                        value={amount2}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/[^\d.]/g, '');
+                          setAmount2(value);
+                        }}
+                        className="flex-1 bg-background border-glass"
+                      />
+                      <Button variant="outline" size="sm" className="border-glass">
+                        MAX
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Position Preview */}
+              <div className="p-4 rounded-lg bg-gradient-to-br from-primary/5 to-secondary/5 border border-glass">
+                <h3 className="font-semibold mb-3">Xem trước position</h3>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Khoảng giá:</span>
+                    <span className="font-medium">
+                      {minPrice || "0"} - {maxPrice || "∞"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Liquidity shares:</span>
+                    <span className="font-medium">{calculateLiquidity()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{token1?.symbol} nạp:</span>
+                    <span className="font-medium">{amount1 || "0"} {token1?.symbol}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{token2?.symbol} nạp:</span>
+                    <span className="font-medium">{amount2 || "0"} {token2?.symbol}</span>
+                  </div>
+                  <div className="pt-2 mt-2 border-t border-glass/50">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Phí giao dịch:</span>
+                      <span className="font-medium">{selectedFee}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
         </div>
 
-        <div className="pt-4 border-t border-glass">
+        <div className="pt-4 border-t border-glass flex gap-2">
+          {step === 2 && (
+            <Button
+              onClick={handleBack}
+              variant="outline"
+              className="flex-1 border-glass"
+            >
+              Quay lại
+            </Button>
+          )}
           <Button
             onClick={handleContinue}
             disabled={step === 1 ? !canContinueStep1 : !canContinueStep2}
-            className="w-full bg-gradient-primary hover:opacity-90 transition-opacity disabled:opacity-50"
+            className={cn(
+              "bg-gradient-primary hover:opacity-90 transition-opacity disabled:opacity-50",
+              step === 1 ? "w-full" : "flex-1"
+            )}
           >
-            Tiếp tục
+            {step === 1 ? "Tiếp tục" : "Tạo Position"}
           </Button>
         </div>
       </DialogContent>
