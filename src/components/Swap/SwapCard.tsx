@@ -6,7 +6,6 @@ import { ArrowUpDown, RefreshCw } from "lucide-react";
 import { TokenSelector, Token } from "./TokenSelector";
 import { SlippageSettings } from "./SlippageSettings";
 import { SwapConfirmDialog } from "./SwapConfirmDialog";
-import { PriceChart } from "./PriceChart";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { saveTransaction } from "@/types/transaction";
@@ -24,9 +23,17 @@ const fetchTokenPrices = async (tokenIds: string[]): Promise<Record<string, Toke
   return response.json();
 };
 
-export const SwapCard = () => {
+interface SwapCardProps {
+  onTokensChange?: (fromToken: Token | null, toToken: Token | null) => void;
+}
+
+export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
   const [fromToken, setFromToken] = useState<Token | null>(null);
   const [toToken, setToToken] = useState<Token | null>(null);
+
+  useEffect(() => {
+    onTokensChange?.(fromToken, toToken);
+  }, [fromToken, toToken, onTokensChange]);
   const [fromAmount, setFromAmount] = useState("");
   const [toAmount, setToAmount] = useState("");
   const [isFromInput, setIsFromInput] = useState(true);
@@ -139,9 +146,7 @@ export const SwapCard = () => {
 
   return (
     <>
-      <PriceChart fromToken={fromToken} toToken={toToken} />
-      
-      <Card className="w-full max-w-md p-4 bg-card/80 backdrop-blur-xl border-glass shadow-glow">
+      <Card className="w-full p-4 bg-card/80 backdrop-blur-xl border-glass shadow-glow">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Swap</h2>
         <div className="flex items-center gap-2">
