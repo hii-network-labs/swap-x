@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { getTokensForNetwork, searchTokenByAddress } from "@/services/tokenService";
 import { useToast } from "@/hooks/use-toast";
 import { isCustomToken, removeCustomToken } from "@/utils/tokenStorage";
+import { getTokenBalance, getNativeBalance } from "@/utils/erc20";
 
 const POPULAR_TOKENS: Token[] = [
   { symbol: "ETH", name: "Ethereum", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "ethereum" },
@@ -269,8 +270,48 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
   const [amount2, setAmount2] = useState("");
   const [priceRangeError, setPriceRangeError] = useState<string | null>(null);
   
-  const { currentNetwork } = useNetwork();
+  // Balance states
+  const [balance1, setBalance1] = useState<string | null>(null);
+  const [balance2, setBalance2] = useState<string | null>(null);
+  const [loadingBalances, setLoadingBalances] = useState(false);
+  
+  const { currentNetwork, walletAddress } = useNetwork();
   const { toast } = useToast();
+
+  // Fetch balances when tokens or wallet change
+  useEffect(() => {
+    const fetchBalances = async () => {
+      if (!walletAddress || !token1 || !token2) {
+        setBalance1(null);
+        setBalance2(null);
+        return;
+      }
+
+      setLoadingBalances(true);
+      try {
+        // Fetch both balances in parallel
+        const [bal1, bal2] = await Promise.all([
+          token1.address === "0x0000000000000000000000000000000000000000"
+            ? getNativeBalance(walletAddress, currentNetwork.rpcUrl)
+            : getTokenBalance(token1.address, walletAddress, currentNetwork.rpcUrl),
+          token2.address === "0x0000000000000000000000000000000000000000"
+            ? getNativeBalance(walletAddress, currentNetwork.rpcUrl)
+            : getTokenBalance(token2.address, walletAddress, currentNetwork.rpcUrl),
+        ]);
+
+        setBalance1(bal1);
+        setBalance2(bal2);
+      } catch (error) {
+        console.error("Error fetching balances:", error);
+        setBalance1(null);
+        setBalance2(null);
+      } finally {
+        setLoadingBalances(false);
+      }
+    };
+
+    fetchBalances();
+  }, [token1, token2, walletAddress, currentNetwork.rpcUrl]);
 
   const validateCustomFee = (value: string): boolean => {
     setCustomFeeError(null);
@@ -389,7 +430,33 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     setAmount1("");
     setAmount2("");
     setPriceRangeError(null);
+    setBalance1(null);
+    setBalance2(null);
     onOpenChange(false);
+  };
+
+  // Handle MAX button click
+  const handleMaxAmount1 = () => {
+    if (balance1) {
+      setAmount1(balance1);
+    }
+  };
+
+  const handleMaxAmount2 = () => {
+    if (balance2) {
+      setAmount2(balance2);
+    }
+  };
+
+  // Format balance for display
+  const formatBalance = (balance: string | null): string => {
+    if (!balance) return "0.0";
+    const num = parseFloat(balance);
+    if (num === 0) return "0.0";
+    if (num < 0.0001) return "< 0.0001";
+    if (num < 1) return num.toFixed(6);
+    if (num < 1000) return num.toFixed(4);
+    return num.toFixed(2);
   };
 
   const canContinueStep1 = token1 && token2 && token1.address !== token2.address && selectedFee !== null && !customFeeError;
@@ -747,7 +814,18 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <Label>{token1?.symbol}</Label>
-                      <span className="text-xs text-muted-foreground">Balance: 0.0</span>
+                      <span className="text-xs text-muted-foreground">
+                        {loadingBalances ? (
+                          <span className="flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Loading...
+                          </span>
+                        ) : walletAddress ? (
+                          `Balance: ${formatBalance(balance1)}`
+                        ) : (
+                          "Connect wallet"
+                        )}
+                      </span>
                     </div>
                     <div className="flex gap-2">
                       <Input
@@ -760,7 +838,13 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                         }}
                         className="flex-1 bg-background border-glass"
                       />
-                      <Button variant="outline" size="sm" className="border-glass">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="border-glass"
+                        onClick={handleMaxAmount1}
+                        disabled={!balance1 || parseFloat(balance1) === 0}
+                      >
                         MAX
                       </Button>
                     </div>
@@ -769,7 +853,18 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <Label>{token2?.symbol}</Label>
-                      <span className="text-xs text-muted-foreground">Balance: 0.0</span>
+                      <span className="text-xs text-muted-foreground">
+                        {loadingBalances ? (
+                          <span className="flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Loading...
+                          </span>
+                        ) : walletAddress ? (
+                          `Balance: ${formatBalance(balance2)}`
+                        ) : (
+                          "Connect wallet"
+                        )}
+                      </span>
                     </div>
                     <div className="flex gap-2">
                       <Input
@@ -782,7 +877,13 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                         }}
                         className="flex-1 bg-background border-glass"
                       />
-                      <Button variant="outline" size="sm" className="border-glass">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="border-glass"
+                        onClick={handleMaxAmount2}
+                        disabled={!balance2 || parseFloat(balance2) === 0}
+                      >
                         MAX
                       </Button>
                     </div>
