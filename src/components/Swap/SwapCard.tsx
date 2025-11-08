@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowDown, Settings, RefreshCw } from "lucide-react";
+import { ArrowUpDown, Settings, RefreshCw } from "lucide-react";
 import { TokenSelector, Token } from "./TokenSelector";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
@@ -135,7 +135,7 @@ export const SwapCard = () => {
             disabled={!fromToken || !toToken}
             className="h-10 w-10 rounded-xl bg-card border border-glass hover:bg-muted/50 transition-all hover:rotate-180 disabled:opacity-50"
           >
-            <ArrowDown className="h-5 w-5" />
+            <ArrowUpDown className="h-5 w-5" />
           </Button>
         </div>
 
