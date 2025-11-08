@@ -48,6 +48,13 @@ export const Header = () => {
               >
                 Pools
               </NavLink>
+              <NavLink 
+                to="/history" 
+                className="text-muted-foreground hover:text-foreground transition-colors"
+                activeClassName="text-foreground font-medium"
+              >
+                Lịch sử
+              </NavLink>
             </nav>
           </div>
           

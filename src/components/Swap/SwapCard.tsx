@@ -5,8 +5,11 @@ import { Input } from "@/components/ui/input";
 import { ArrowUpDown, RefreshCw } from "lucide-react";
 import { TokenSelector, Token } from "./TokenSelector";
 import { SlippageSettings } from "./SlippageSettings";
+import { SwapConfirmDialog } from "./SwapConfirmDialog";
+import { PriceChart } from "./PriceChart";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
+import { saveTransaction } from "@/types/transaction";
 
 interface TokenPrice {
   usd: number;
@@ -29,6 +32,7 @@ export const SwapCard = () => {
   const [isFromInput, setIsFromInput] = useState(true);
   const [countdown, setCountdown] = useState(15);
   const [slippage, setSlippage] = useState(0.5);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
 
   // Fetch prices for selected tokens
   const { data: prices, isLoading: pricesLoading } = useQuery({
@@ -91,7 +95,38 @@ export const SwapCard = () => {
       toast.error("Vui lòng điền đầy đủ thông tin");
       return;
     }
-    toast.success("Giao dịch đã được khởi tạo! (Chế độ demo)");
+    setShowConfirmDialog(true);
+  };
+
+  const handleConfirmSwap = () => {
+    if (!fromToken || !toToken || !fromAmount || !toAmount || !exchangeRate) return;
+
+    const fromPrice = prices?.[fromToken.coingeckoId]?.usd || 0;
+    const valueUsd = parseFloat(fromAmount) * fromPrice;
+
+    // Save transaction to localStorage
+    saveTransaction({
+      fromToken: {
+        symbol: fromToken.symbol,
+        logo: fromToken.logo,
+        amount: fromAmount,
+      },
+      toToken: {
+        symbol: toToken.symbol,
+        logo: toToken.logo,
+        amount: toAmount,
+      },
+      exchangeRate,
+      slippage,
+      valueUsd,
+    });
+
+    setShowConfirmDialog(false);
+    toast.success("Giao dịch đã hoàn tất! (Chế độ demo)");
+    
+    // Reset form
+    setFromAmount("");
+    setToAmount("");
   };
 
   const switchTokens = () => {
@@ -103,7 +138,10 @@ export const SwapCard = () => {
   };
 
   return (
-    <Card className="w-full max-w-md p-4 bg-card/80 backdrop-blur-xl border-glass shadow-glow">
+    <>
+      <PriceChart fromToken={fromToken} toToken={toToken} />
+      
+      <Card className="w-full max-w-md p-4 bg-card/80 backdrop-blur-xl border-glass shadow-glow">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Swap</h2>
         <div className="flex items-center gap-2">
@@ -221,5 +259,24 @@ export const SwapCard = () => {
         {pricesLoading ? 'Đang tải giá...' : 'Hoán đổi'}
       </Button>
     </Card>
+
+    {fromToken && toToken && exchangeRate && showConfirmDialog && (
+      <SwapConfirmDialog
+        open={showConfirmDialog}
+        onOpenChange={setShowConfirmDialog}
+        onConfirm={handleConfirmSwap}
+        fromToken={fromToken}
+        toToken={toToken}
+        fromAmount={fromAmount}
+        toAmount={toAmount}
+        exchangeRate={exchangeRate}
+        slippage={slippage}
+        priceUsd={{
+          from: prices?.[fromToken.coingeckoId]?.usd || 0,
+          to: prices?.[toToken.coingeckoId]?.usd || 0,
+        }}
+      />
+    )}
+    </>
   );
 };
