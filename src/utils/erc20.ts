@@ -18,23 +18,46 @@ export const fetchTokenInfo = async (
   chainId: number
 ): Promise<Token | null> => {
   try {
+    console.log(`Fetching token info for ${tokenAddress} on chain ${chainId} using RPC: ${rpcUrl}`);
+    
     // Validate address format
     if (!ethers.isAddress(tokenAddress)) {
+      console.error("Invalid address format:", tokenAddress);
       throw new Error("Invalid address format");
     }
 
-    // Create provider
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    // Create provider with timeout
+    const provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
+      staticNetwork: true,
+    });
 
     // Create contract instance
     const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
 
-    // Fetch token info in parallel
-    const [name, symbol, decimals] = await Promise.all([
-      contract.name().catch(() => "Unknown Token"),
-      contract.symbol().catch(() => "UNKNOWN"),
-      contract.decimals().catch(() => 18),
-    ]);
+    console.log("Calling ERC20 methods...");
+    
+    // Fetch token info in parallel with timeout
+    const [name, symbol, decimals] = await Promise.race([
+      Promise.all([
+        contract.name().catch((e) => {
+          console.error("Error fetching name:", e.message);
+          return "Unknown Token";
+        }),
+        contract.symbol().catch((e) => {
+          console.error("Error fetching symbol:", e.message);
+          return "UNKNOWN";
+        }),
+        contract.decimals().catch((e) => {
+          console.error("Error fetching decimals:", e.message);
+          return 18;
+        }),
+      ]),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("RPC timeout")), 10000)
+      ),
+    ]) as [string, string, number];
+
+    console.log("Token info fetched successfully:", { name, symbol, decimals });
 
     // Generate a simple emoji logo based on symbol
     const logo = generateTokenLogo(symbol);
@@ -46,8 +69,8 @@ export const fetchTokenInfo = async (
       address: tokenAddress,
       coingeckoId: "", // Would need additional API call to CoinGecko
     };
-  } catch (error) {
-    console.error("Error fetching token info:", error);
+  } catch (error: any) {
+    console.error("Error fetching token info:", error.message || error);
     return null;
   }
 };
@@ -116,17 +139,38 @@ export const isValidERC20 = async (
   rpcUrl: string
 ): Promise<boolean> => {
   try {
+    console.log(`Verifying ERC20 contract at ${tokenAddress}`);
+    
     if (!ethers.isAddress(tokenAddress)) {
+      console.log("Invalid address format");
       return false;
     }
 
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
+      staticNetwork: true,
+    });
+    
+    // Check if there's code at the address
+    const code = await provider.getCode(tokenAddress);
+    if (code === "0x") {
+      console.log("No contract code found at address");
+      return false;
+    }
+
     const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
 
     // Try to call symbol() - if it works, it's likely an ERC20 token
-    await contract.symbol();
+    const symbol = await Promise.race([
+      contract.symbol(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("RPC timeout")), 8000)
+      ),
+    ]);
+    
+    console.log("Valid ERC20 token found, symbol:", symbol);
     return true;
-  } catch (error) {
+  } catch (error: any) {
+    console.error("ERC20 validation failed:", error.message || error);
     return false;
   }
 };

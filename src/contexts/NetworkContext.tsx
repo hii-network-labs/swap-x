@@ -20,14 +20,14 @@ export const NETWORKS: Network[] = [
     id: "sepolia",
     name: "Sepolia Testnet",
     chainId: 11155111,
-    rpcUrl: "https://rpc.sepolia.org",
+    rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
     isTestnet: true,
   },
   {
     id: "goerli",
     name: "Goerli Testnet",
     chainId: 5,
-    rpcUrl: "https://goerli.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161",
+    rpcUrl: "https://ethereum-goerli-rpc.publicnode.com",
     isTestnet: true,
   },
   {
