@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ChevronDown, Search, Info } from "lucide-react";
+import { ChevronDown, Search, Info, Loader2 } from "lucide-react";
 import { Token } from "@/components/Swap/TokenSelector";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { Badge } from "@/components/ui/badge";
+import { getTokensForNetwork, searchTokenByAddress } from "@/services/tokenService";
+import { useToast } from "@/hooks/use-toast";
 
 const POPULAR_TOKENS: Token[] = [
   { symbol: "ETH", name: "Ethereum", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "ethereum" },
@@ -47,8 +49,69 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const { currentNetwork } = useNetwork();
+  const [availableTokens, setAvailableTokens] = useState<Token[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSearchingAddress, setIsSearchingAddress] = useState(false);
+  const { toast } = useToast();
 
-  const filteredTokens = POPULAR_TOKENS.filter(t =>
+  // Load tokens when network changes or dialog opens
+  useEffect(() => {
+    if (pickerOpen) {
+      loadTokens();
+    }
+  }, [pickerOpen, currentNetwork.chainId]);
+
+  const loadTokens = async () => {
+    setIsLoading(true);
+    try {
+      const tokens = await getTokensForNetwork(currentNetwork.chainId);
+      setAvailableTokens(tokens);
+    } catch (error) {
+      console.error("Error loading tokens:", error);
+      toast({
+        title: "Lỗi tải token",
+        description: "Không thể tải danh sách token. Vui lòng thử lại.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Search by address if query looks like an address
+  useEffect(() => {
+    const searchAddress = async () => {
+      if (searchQuery.match(/^0x[a-fA-F0-9]{40}$/)) {
+        setIsSearchingAddress(true);
+        try {
+          const foundToken = await searchTokenByAddress(searchQuery, currentNetwork.chainId);
+          if (foundToken) {
+            // Add to list if not already present
+            setAvailableTokens((prev) => {
+              const exists = prev.find(
+                (t) => t.address.toLowerCase() === foundToken.address.toLowerCase()
+              );
+              return exists ? prev : [foundToken, ...prev];
+            });
+          } else {
+            toast({
+              title: "Token không tìm thấy",
+              description: "Không tìm thấy token với địa chỉ này trên mạng hiện tại.",
+            });
+          }
+        } catch (error) {
+          console.error("Error searching token:", error);
+        } finally {
+          setIsSearchingAddress(false);
+        }
+      }
+    };
+
+    const timeoutId = setTimeout(searchAddress, 500);
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery, currentNetwork.chainId]);
+
+  const filteredTokens = availableTokens.filter(t =>
     t.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
     t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     t.address.toLowerCase().includes(searchQuery.toLowerCase())
@@ -89,30 +152,51 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
           </DialogHeader>
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            {isSearchingAddress && (
+              <Loader2 className="absolute right-3 top-3 h-4 w-4 text-muted-foreground animate-spin" />
+            )}
             <Input
-              placeholder="Tìm kiếm tên hoặc địa chỉ token"
+              placeholder="Tìm kiếm tên hoặc địa chỉ token (0x...)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 bg-muted/50 border-glass"
+              className="pl-10 pr-10 bg-muted/50 border-glass"
             />
           </div>
-          <ScrollArea className="h-[300px]">
-            <div className="space-y-1">
-              {filteredTokens.map((t) => (
-                <button
-                  key={t.address}
-                  onClick={() => handleSelect(t)}
-                  className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors"
-                >
-                  <span className="text-3xl">{t.logo}</span>
-                  <div className="flex flex-col items-start">
-                    <span className="font-semibold">{t.symbol}</span>
-                    <span className="text-xs text-muted-foreground">{t.name}</span>
-                  </div>
-                </button>
-              ))}
+          {isLoading ? (
+            <div className="flex items-center justify-center h-[300px]">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
-          </ScrollArea>
+          ) : (
+            <ScrollArea className="h-[300px]">
+              <div className="space-y-1">
+                {filteredTokens.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p>Không tìm thấy token</p>
+                    <p className="text-xs mt-2">
+                      Thử nhập địa chỉ contract (0x...)
+                    </p>
+                  </div>
+                ) : (
+                  filteredTokens.map((t) => (
+                    <button
+                      key={t.address}
+                      onClick={() => handleSelect(t)}
+                      className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors"
+                    >
+                      <span className="text-3xl">{t.logo}</span>
+                      <div className="flex flex-col items-start flex-1">
+                        <span className="font-semibold">{t.symbol}</span>
+                        <span className="text-xs text-muted-foreground">{t.name}</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground font-mono">
+                        {t.address.slice(0, 6)}...{t.address.slice(-4)}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+          )}
         </DialogContent>
       </Dialog>
     </div>
