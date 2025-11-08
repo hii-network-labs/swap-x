@@ -1,10 +1,11 @@
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
 import { Wallet } from "lucide-react";
-import { useState } from "react";
+import { NetworkSelector } from "./NetworkSelector";
+import { useNetwork } from "@/contexts/NetworkContext";
 
 export const Header = () => {
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const { walletAddress, setWalletAddress, currentNetwork } = useNetwork();
 
   const connectWallet = async () => {
     if (typeof window.ethereum !== 'undefined') {
@@ -58,13 +59,16 @@ export const Header = () => {
             </nav>
           </div>
           
-          <Button 
-            onClick={connectWallet}
-            className="bg-gradient-primary hover:opacity-90 transition-opacity"
-          >
-            <Wallet className="mr-2 h-4 w-4" />
-            {walletAddress ? formatAddress(walletAddress) : 'Connect Wallet'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <NetworkSelector />
+            <Button 
+              onClick={connectWallet}
+              className="bg-gradient-primary hover:opacity-90 transition-opacity"
+            >
+              <Wallet className="mr-2 h-4 w-4" />
+              {walletAddress ? formatAddress(walletAddress) : 'Connect Wallet'}
+            </Button>
+          </div>
         </div>
       </div>
     </header>

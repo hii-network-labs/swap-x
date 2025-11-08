@@ -7,6 +7,8 @@ import { ChevronDown, Search, Info } from "lucide-react";
 import { Token } from "@/components/Swap/TokenSelector";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { useNetwork } from "@/contexts/NetworkContext";
+import { Badge } from "@/components/ui/badge";
 
 const POPULAR_TOKENS: Token[] = [
   { symbol: "ETH", name: "Ethereum", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "ethereum" },
@@ -44,6 +46,7 @@ interface TokenPickerProps {
 const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const { currentNetwork } = useNetwork();
 
   const filteredTokens = POPULAR_TOKENS.filter(t =>
     t.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -77,7 +80,12 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
         </button>
         <DialogContent className="bg-card border-glass">
           <DialogHeader>
-            <DialogTitle>Chọn token</DialogTitle>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Chọn token</span>
+              <Badge variant="outline" className="border-glass">
+                {currentNetwork.name}
+              </Badge>
+            </DialogTitle>
           </DialogHeader>
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
@@ -118,6 +126,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
   const [selectedFee, setSelectedFee] = useState<string | null>(null);
   const [customFee, setCustomFee] = useState("");
   const [feeSearch, setFeeSearch] = useState("");
+  const { currentNetwork } = useNetwork();
 
   const handleClose = () => {
     setStep(1);
@@ -146,7 +155,18 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="bg-card/95 backdrop-blur-xl border-glass max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle className="text-2xl font-bold">Vị thế mới</DialogTitle>
+          <DialogTitle className="text-2xl font-bold flex items-center justify-between">
+            <span>Vị thế mới</span>
+            <Badge 
+              variant={currentNetwork.isTestnet ? "outline" : "default"} 
+              className={cn(
+                "border-glass",
+                currentNetwork.isTestnet && "text-orange-500 border-orange-500/50"
+              )}
+            >
+              {currentNetwork.name}
+            </Badge>
+          </DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-1">
