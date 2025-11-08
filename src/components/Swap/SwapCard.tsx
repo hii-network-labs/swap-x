@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowUpDown, Settings, RefreshCw } from "lucide-react";
+import { ArrowUpDown, RefreshCw } from "lucide-react";
 import { TokenSelector, Token } from "./TokenSelector";
+import { SlippageSettings } from "./SlippageSettings";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 
@@ -27,6 +28,7 @@ export const SwapCard = () => {
   const [toAmount, setToAmount] = useState("");
   const [isFromInput, setIsFromInput] = useState(true);
   const [countdown, setCountdown] = useState(15);
+  const [slippage, setSlippage] = useState(0.5);
 
   // Fetch prices for selected tokens
   const { data: prices, isLoading: pricesLoading } = useQuery({
@@ -111,9 +113,7 @@ export const SwapCard = () => {
               {countdown}s
             </span>
           )}
-          <Button variant="ghost" size="icon" className="h-8 w-8">
-            <Settings className="h-4 w-4" />
-          </Button>
+          <SlippageSettings slippage={slippage} onSlippageChange={setSlippage} />
         </div>
       </div>
 
@@ -186,7 +186,7 @@ export const SwapCard = () => {
         </div>
       </div>
 
-      {fromToken && toToken && exchangeRate && (
+      {fromToken && toToken && exchangeRate && toAmount && (
         <div className="mt-4 p-3 bg-muted/30 rounded-xl border border-glass space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">Tỷ giá</span>
@@ -198,6 +198,16 @@ export const SwapCard = () => {
             <span className="text-muted-foreground">Tỷ giá ngược</span>
             <span className="font-medium">
               1 {toToken.symbol} = {(1 / exchangeRate).toFixed(6)} {fromToken.symbol}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Slippage tolerance</span>
+            <span className="font-medium">{slippage}%</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Số lượng tối thiểu nhận được</span>
+            <span className="font-medium">
+              {(parseFloat(toAmount) * (1 - slippage / 100)).toFixed(6)} {toToken.symbol}
             </span>
           </div>
         </div>
