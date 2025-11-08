@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ChevronDown, Search, Info, Loader2 } from "lucide-react";
+import { ChevronDown, Search, Info, Loader2, X } from "lucide-react";
 import { Token } from "@/components/Swap/TokenSelector";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ import { useNetwork } from "@/contexts/NetworkContext";
 import { Badge } from "@/components/ui/badge";
 import { getTokensForNetwork, searchTokenByAddress } from "@/services/tokenService";
 import { useToast } from "@/hooks/use-toast";
+import { isCustomToken, removeCustomToken } from "@/utils/tokenStorage";
 
 const POPULAR_TOKENS: Token[] = [
   { symbol: "ETH", name: "Ethereum", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "ethereum" },
@@ -137,6 +138,17 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
     setSearchQuery("");
   };
 
+  const handleRemoveToken = (tokenAddress: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    removeCustomToken(tokenAddress, currentNetwork.chainId);
+    // Reload tokens
+    loadTokens();
+    toast({
+      title: "Token đã xóa",
+      description: "Token đã được xóa khỏi danh sách của bạn.",
+    });
+  };
+
   return (
     <div className="space-y-2">
       <Label className="text-muted-foreground">{label}</Label>
@@ -191,22 +203,45 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
                     </p>
                   </div>
                 ) : (
-                  filteredTokens.map((t) => (
-                    <button
-                      key={t.address}
-                      onClick={() => handleSelect(t)}
-                      className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors"
-                    >
-                      <span className="text-3xl">{t.logo}</span>
-                      <div className="flex flex-col items-start flex-1">
-                        <span className="font-semibold">{t.symbol}</span>
-                        <span className="text-xs text-muted-foreground">{t.name}</span>
+                  filteredTokens.map((t) => {
+                    const isCustom = isCustomToken(t.address, currentNetwork.chainId);
+                    return (
+                      <div
+                        key={t.address}
+                        className="relative group"
+                      >
+                        <button
+                          onClick={() => handleSelect(t)}
+                          className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors"
+                        >
+                          <span className="text-3xl">{t.logo}</span>
+                          <div className="flex flex-col items-start flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold">{t.symbol}</span>
+                              {isCustom && (
+                                <Badge variant="outline" className="text-xs border-glass">
+                                  Custom
+                                </Badge>
+                              )}
+                            </div>
+                            <span className="text-xs text-muted-foreground">{t.name}</span>
+                          </div>
+                          <span className="text-xs text-muted-foreground font-mono">
+                            {t.address.slice(0, 6)}...{t.address.slice(-4)}
+                          </span>
+                        </button>
+                        {isCustom && (
+                          <button
+                            onClick={(e) => handleRemoveToken(t.address, e)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md bg-destructive/20 hover:bg-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Xóa token này"
+                          >
+                            <X className="h-4 w-4 text-destructive" />
+                          </button>
+                        )}
                       </div>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {t.address.slice(0, 6)}...{t.address.slice(-4)}
-                      </span>
-                    </button>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </ScrollArea>

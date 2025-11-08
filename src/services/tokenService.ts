@@ -1,5 +1,6 @@
 import { Token } from "@/components/Swap/TokenSelector";
 import { fetchTokenInfo, isValidERC20 } from "@/utils/erc20";
+import { getCustomTokens, saveCustomToken as saveToStorage } from "@/utils/tokenStorage";
 
 interface ChainTokenList {
   [chainId: number]: Token[];
@@ -56,7 +57,7 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Get tokens for a specific chain ID
- * Returns cached tokens if available, otherwise returns default list
+ * Merges default tokens with custom tokens from localStorage
  */
 export const getTokensForNetwork = async (chainId: number): Promise<Token[]> => {
   // Check cache first
@@ -67,19 +68,33 @@ export const getTokensForNetwork = async (chainId: number): Promise<Token[]> => 
 
   // Get default tokens for this chain
   const defaultTokens = DEFAULT_TOKENS[chainId] || DEFAULT_TOKENS[1];
+  
+  // Get custom tokens from localStorage
+  const customTokens = getCustomTokens(chainId);
+  
+  // Merge default and custom tokens (remove duplicates)
+  const allTokens = [...defaultTokens];
+  customTokens.forEach((customToken) => {
+    const exists = allTokens.find(
+      (t) => t.address.toLowerCase() === customToken.address.toLowerCase()
+    );
+    if (!exists) {
+      allTokens.push(customToken);
+    }
+  });
 
   // Cache the result
   tokenCache.set(chainId, {
-    tokens: defaultTokens,
+    tokens: allTokens,
     timestamp: Date.now(),
   });
 
-  return defaultTokens;
+  return allTokens;
 };
 
 /**
  * Search for a token by address using ERC20 contract methods
- * Fetches token info directly from blockchain
+ * Fetches token info directly from blockchain and saves to localStorage
  */
 export const searchTokenByAddress = async (
   address: string,
@@ -104,6 +119,10 @@ export const searchTokenByAddress = async (
     
     if (tokenInfo) {
       console.log("Token found:", tokenInfo);
+      // Save to localStorage as custom token
+      saveToStorage(tokenInfo, chainId);
+      // Invalidate cache to force reload
+      tokenCache.delete(chainId);
     }
 
     return tokenInfo;
