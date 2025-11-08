@@ -257,21 +257,85 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
   const [token1, setToken1] = useState<Token | null>(null);
   const [token2, setToken2] = useState<Token | null>(null);
   const [selectedFee, setSelectedFee] = useState<string | null>(null);
-  const [customFee, setCustomFee] = useState("");
+  const [customFeeInput, setCustomFeeInput] = useState("");
+  const [isCustomFee, setIsCustomFee] = useState(false);
+  const [customFeeError, setCustomFeeError] = useState<string | null>(null);
   const [feeSearch, setFeeSearch] = useState("");
   const { currentNetwork } = useNetwork();
+
+  const validateCustomFee = (value: string): boolean => {
+    setCustomFeeError(null);
+    
+    if (!value) {
+      setCustomFeeError("Vui lòng nhập phí");
+      return false;
+    }
+
+    const numValue = parseFloat(value);
+    
+    if (isNaN(numValue)) {
+      setCustomFeeError("Giá trị không hợp lệ");
+      return false;
+    }
+
+    if (numValue < 0.0001) {
+      setCustomFeeError("Phí tối thiểu là 0.0001%");
+      return false;
+    }
+
+    if (numValue > 99.9999) {
+      setCustomFeeError("Phí tối đa là 99.9999%");
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleCustomFeeChange = (value: string) => {
+    // Allow only numbers and one decimal point
+    const sanitized = value.replace(/[^\d.]/g, '');
+    // Prevent multiple decimal points
+    const parts = sanitized.split('.');
+    const formatted = parts.length > 2 
+      ? parts[0] + '.' + parts.slice(1).join('') 
+      : sanitized;
+    
+    setCustomFeeInput(formatted);
+    
+    if (formatted) {
+      validateCustomFee(formatted);
+      setSelectedFee(formatted + '%');
+    } else {
+      setCustomFeeError(null);
+      setSelectedFee(null);
+    }
+  };
+
+  const handlePresetFeeSelect = (fee: string) => {
+    setIsCustomFee(false);
+    setCustomFeeInput("");
+    setCustomFeeError(null);
+    setSelectedFee(fee);
+  };
+
+  const handleCustomFeeToggle = () => {
+    setIsCustomFee(true);
+    setSelectedFee(null);
+  };
 
   const handleClose = () => {
     setStep(1);
     setToken1(null);
     setToken2(null);
     setSelectedFee(null);
-    setCustomFee("");
+    setCustomFeeInput("");
+    setIsCustomFee(false);
+    setCustomFeeError(null);
     setFeeSearch("");
     onOpenChange(false);
   };
 
-  const canContinueStep1 = token1 && token2 && token1.address !== token2.address;
+  const canContinueStep1 = token1 && token2 && token1.address !== token2.address && selectedFee !== null && !customFeeError;
   const canContinueStep2 = selectedFee !== null;
 
   const handleContinue = () => {
@@ -362,9 +426,14 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     <span className="text-sm font-medium">
                       Bậc phí {selectedFee || "0,0001%"}
                     </span>
-                    {selectedFee && (
+                    {selectedFee && !isCustomFee && (
                       <span className="text-xs px-2 py-1 rounded-full bg-primary/20 text-primary">
                         TVL cao nhất
+                      </span>
+                    )}
+                    {isCustomFee && selectedFee && (
+                      <span className="text-xs px-2 py-1 rounded-full bg-secondary/20 text-secondary">
+                        Tùy chọn
                       </span>
                     )}
                   </div>
@@ -376,10 +445,10 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     {FEE_TIERS.map((tier) => (
                       <button
                         key={tier.percentage}
-                        onClick={() => setSelectedFee(tier.percentage)}
+                        onClick={() => handlePresetFeeSelect(tier.percentage)}
                         className={cn(
                           "p-4 rounded-lg border text-left transition-all",
-                          selectedFee === tier.percentage
+                          selectedFee === tier.percentage && !isCustomFee
                             ? "border-primary bg-primary/10"
                             : "border-glass bg-muted/30 hover:bg-muted/50"
                         )}
@@ -391,8 +460,42 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     ))}
                   </div>
 
-                  {/* Search for other fee tiers */}
-                  <div className="relative mt-4">
+                  {/* Custom Fee Input */}
+                  <div className="mt-4 p-4 rounded-lg border border-glass bg-muted/20">
+                    <div className="flex items-center justify-between mb-3">
+                      <Label className="font-semibold">Bậc phí tùy chọn</Label>
+                      <span className="text-xs text-muted-foreground">0.0001% - 99.9999%</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <div className="relative">
+                          <Input
+                            type="text"
+                            placeholder="Nhập phí (vd: 0.5)"
+                            value={customFeeInput}
+                            onChange={(e) => handleCustomFeeChange(e.target.value)}
+                            onFocus={handleCustomFeeToggle}
+                            className={cn(
+                              "pr-8 bg-background border-glass",
+                              customFeeError && "border-destructive"
+                            )}
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
+                            %
+                          </span>
+                        </div>
+                        {customFeeError && (
+                          <p className="text-xs text-destructive mt-1">{customFeeError}</p>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Phí cao hơn có thể mang lại lợi nhuận cao hơn nhưng giảm tính cạnh tranh
+                    </p>
+                  </div>
+
+                  {/* Search for other fee tiers - Hidden for now */}
+                  <div className="relative mt-4 hidden">
                     <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input
                       placeholder="Tìm kiếm hoặc tạo các bậc phí khác (Nâng cao)"
