@@ -1,6 +1,8 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, TrendingUp } from "lucide-react";
+import { useState } from "react";
+import { CreatePoolDialog } from "@/components/Pools/CreatePoolDialog";
 
 interface Pool {
   pair: string;
@@ -18,6 +20,8 @@ const MOCK_POOLS: Pool[] = [
 ];
 
 const Pools = () => {
+  const [createPoolOpen, setCreatePoolOpen] = useState(false);
+
   return (
     <div className="min-h-[calc(100vh-73px)] bg-gradient-bg p-4 md:p-8">
       <div className="container mx-auto max-w-6xl">
@@ -31,7 +35,10 @@ const Pools = () => {
                 Provide liquidity and earn trading fees
               </p>
             </div>
-            <Button className="bg-gradient-primary hover:opacity-90">
+            <Button 
+              onClick={() => setCreatePoolOpen(true)}
+              className="bg-gradient-primary hover:opacity-90"
+            >
               <Plus className="mr-2 h-4 w-4" />
               New Position
             </Button>
@@ -117,6 +124,8 @@ const Pools = () => {
             </div>
           </Card>
         </div>
+
+        <CreatePoolDialog open={createPoolOpen} onOpenChange={setCreatePoolOpen} />
       </div>
     </div>
   );
