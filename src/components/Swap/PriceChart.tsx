@@ -38,16 +38,6 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
     enabled: !!toToken,
   });
 
-  if (!fromToken || !toToken) {
-    return (
-      <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
-        <div className="text-center text-muted-foreground">
-          Chọn cả hai token để xem biểu đồ giá
-        </div>
-      </Card>
-    );
-  }
-
   const isLoading = fromLoading || toLoading;
 
   // Calculate exchange rate history
@@ -73,13 +63,23 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
   const firstRate = chartData.length > 0 ? chartData[0].rate : 0;
   const priceChange = firstRate > 0 ? ((currentRate - firstRate) / firstRate) * 100 : 0;
 
-  // Track price changes for color animation
+  // Track price changes for color animation - MUST be before early return
   useEffect(() => {
     if (currentRate > 0 && previousRateRef.current !== null) {
       setIsPriceIncreasing(currentRate > previousRateRef.current);
     }
     previousRateRef.current = currentRate;
   }, [currentRate]);
+
+  if (!fromToken || !toToken) {
+    return (
+      <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
+        <div className="text-center text-muted-foreground">
+          Chọn cả hai token để xem biểu đồ giá
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass space-y-4">
