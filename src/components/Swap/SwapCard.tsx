@@ -26,6 +26,7 @@ export const SwapCard = () => {
   const [fromAmount, setFromAmount] = useState("");
   const [toAmount, setToAmount] = useState("");
   const [isFromInput, setIsFromInput] = useState(true);
+  const [countdown, setCountdown] = useState(15);
 
   // Fetch prices for selected tokens
   const { data: prices, isLoading: pricesLoading } = useQuery({
@@ -36,8 +37,23 @@ export const SwapCard = () => {
       return fetchTokenPrices(ids as string[]);
     },
     enabled: !!(fromToken && toToken),
-    refetchInterval: 30000, // Refetch every 30 seconds
+    refetchInterval: 15000, // Refetch every 15 seconds
   });
+
+  // Countdown timer for price refresh
+  useEffect(() => {
+    if (!fromToken || !toToken) return;
+    
+    setCountdown(15);
+    const interval = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) return 15;
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [prices, fromToken, toToken]);
 
   // Calculate exchange rate
   const exchangeRate = 
@@ -88,9 +104,12 @@ export const SwapCard = () => {
     <Card className="w-full max-w-md p-4 bg-card/80 backdrop-blur-xl border-glass shadow-glow">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Swap</h2>
-        <div className="flex gap-2">
-          {pricesLoading && (
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+        <div className="flex items-center gap-2">
+          {fromToken && toToken && (
+            <span className="text-sm text-muted-foreground flex items-center gap-1">
+              <RefreshCw className={`h-3 w-3 ${pricesLoading ? 'animate-spin' : ''}`} />
+              {countdown}s
+            </span>
           )}
           <Button variant="ghost" size="icon" className="h-8 w-8">
             <Settings className="h-4 w-4" />
