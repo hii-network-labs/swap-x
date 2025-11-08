@@ -332,7 +332,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     setSelectedFee(null);
   };
 
-  const validatePriceRange = () => {
+  const validatePriceRange = (): boolean => {
     setPriceRangeError(null);
     
     if (!minPrice || !maxPrice) {
@@ -361,6 +361,20 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     return true;
   };
 
+  // Check if price range is valid without updating state (for condition checks)
+  const isPriceRangeValid = (): boolean => {
+    if (!minPrice || !maxPrice) return false;
+    
+    const min = parseFloat(minPrice);
+    const max = parseFloat(maxPrice);
+    
+    if (isNaN(min) || isNaN(max)) return false;
+    if (min <= 0 || max <= 0) return false;
+    if (min >= max) return false;
+    
+    return true;
+  };
+
   const handleClose = () => {
     setStep(1);
     setToken1(null);
@@ -379,7 +393,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
   };
 
   const canContinueStep1 = token1 && token2 && token1.address !== token2.address && selectedFee !== null && !customFeeError;
-  const canContinueStep2 = amount1 && amount2 && validatePriceRange();
+  const canContinueStep2 = amount1 && amount2 && isPriceRangeValid();
 
   const handleContinue = () => {
     if (step === 1 && canContinueStep1) {
@@ -455,6 +469,9 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
               {currentNetwork.name}
             </Badge>
           </DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Tạo liquidity position mới trên {currentNetwork.name}
+          </p>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-1">
