@@ -24,22 +24,23 @@ export interface Pool {
 
 export interface Position {
   id: string;
+  tokenId: string;
   owner: string;
+  transfers: Array<{
+    id: string;
+  }>;
+}
+
+export interface ModifyLiquidity {
+  id: string;
   pool: Pool;
-  liquidity: string;
+  sender: string;
   tickLower: string;
   tickUpper: string;
-  token0: {
+  liquidityDelta: string;
+  transaction: {
     id: string;
-    symbol: string;
-    name: string;
-    decimals: string;
-  };
-  token1: {
-    id: string;
-    symbol: string;
-    name: string;
-    decimals: string;
+    timestamp: string;
   };
 }
 
@@ -142,25 +143,38 @@ export async function fetchPositions(owner: string, first: number = 100, skip: n
         where: { owner: $owner }
         first: $first
         skip: $skip
-        orderBy: liquidity
+      ) {
+        id
+        tokenId
+        owner
+        transfers {
+          id
+        }
+      }
+    }
+  `;
+
+  const data = await fetchGraphQL(query, { owner: owner.toLowerCase(), first, skip });
+  return data.positions || [];
+}
+
+export async function fetchModifyLiquidities(first: number = 100, skip: number = 0): Promise<ModifyLiquidity[]> {
+  const query = `
+    query GetModifyLiquidities($first: Int!, $skip: Int!) {
+      modifyLiquidities(
+        first: $first
+        skip: $skip
+        orderBy: transaction__timestamp
         orderDirection: desc
       ) {
         id
-        owner
-        liquidity
+        sender
         tickLower
         tickUpper
-        token0 {
+        liquidityDelta
+        transaction {
           id
-          symbol
-          name
-          decimals
-        }
-        token1 {
-          id
-          symbol
-          name
-          decimals
+          timestamp
         }
         pool {
           id
@@ -187,30 +201,28 @@ export async function fetchPositions(owner: string, first: number = 100, skip: n
     }
   `;
 
-  const data = await fetchGraphQL(query, { owner: owner.toLowerCase(), first, skip });
-  return data.positions || [];
+  const data = await fetchGraphQL(query, { first, skip });
+  return data.modifyLiquidities || [];
 }
 
-export async function fetchPosition(positionId: string): Promise<Position | null> {
+export async function fetchModifyLiquiditiesBySender(sender: string, first: number = 100, skip: number = 0): Promise<ModifyLiquidity[]> {
   const query = `
-    query GetPosition($id: ID!) {
-      position(id: $id) {
+    query GetModifyLiquiditiesBySender($sender: String!, $first: Int!, $skip: Int!) {
+      modifyLiquidities(
+        where: { sender: $sender }
+        first: $first
+        skip: $skip
+        orderBy: transaction__timestamp
+        orderDirection: desc
+      ) {
         id
-        owner
-        liquidity
+        sender
         tickLower
         tickUpper
-        token0 {
+        liquidityDelta
+        transaction {
           id
-          symbol
-          name
-          decimals
-        }
-        token1 {
-          id
-          symbol
-          name
-          decimals
+          timestamp
         }
         pool {
           id
@@ -232,6 +244,24 @@ export async function fetchPosition(positionId: string): Promise<Position | null
           volumeToken0
           volumeToken1
           txCount
+        }
+      }
+    }
+  `;
+
+  const data = await fetchGraphQL(query, { sender: sender.toLowerCase(), first, skip });
+  return data.modifyLiquidities || [];
+}
+
+export async function fetchPosition(positionId: string): Promise<Position | null> {
+  const query = `
+    query GetPosition($id: ID!) {
+      position(id: $id) {
+        id
+        tokenId
+        owner
+        transfers {
+          id
         }
       }
     }

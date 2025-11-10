@@ -1,15 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchPositions, Position } from "@/services/graphql/subgraph";
+import { fetchModifyLiquiditiesBySender, ModifyLiquidity } from "@/services/graphql/subgraph";
 import { useNetwork } from "@/contexts/NetworkContext";
 
 export function useSubgraphPositions() {
   const { walletAddress } = useNetwork();
 
-  const { data, isLoading, error, refetch } = useQuery<Position[]>({
+  const { data, isLoading, error, refetch } = useQuery<ModifyLiquidity[]>({
     queryKey: ["subgraph-positions", walletAddress],
     queryFn: () => {
       if (!walletAddress) return Promise.resolve([]);
-      return fetchPositions(walletAddress, 100, 0);
+      return fetchModifyLiquiditiesBySender(walletAddress, 100, 0);
     },
     enabled: !!walletAddress,
     staleTime: 30000, // 30 seconds

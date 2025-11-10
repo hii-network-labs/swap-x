@@ -62,7 +62,7 @@ const MyPositions = () => {
           <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
           <h2 className="text-2xl font-bold mb-2">Loading Positions</h2>
           <p className="text-muted-foreground">
-            Fetching your positions from the blockchain...
+            Fetching your liquidity modifications from the blockchain...
           </p>
         </Card>
       </div>
@@ -95,7 +95,7 @@ const MyPositions = () => {
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
-            <div className="text-sm text-muted-foreground mb-1">Active Positions</div>
+            <div className="text-sm text-muted-foreground mb-1">Liquidity Actions</div>
             <div className="text-2xl font-bold">
               {positions.length}
             </div>
@@ -116,9 +116,9 @@ const MyPositions = () => {
           </Card>
 
           <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
-            <div className="text-sm text-muted-foreground mb-1">Total Liquidity</div>
+            <div className="text-sm text-muted-foreground mb-1">Total Modifications</div>
             <div className="text-2xl font-bold">
-              {positions.length} {positions.length === 1 ? 'Pool' : 'Pools'}
+              {positions.length}
             </div>
           </Card>
         </div>
@@ -129,13 +129,13 @@ const MyPositions = () => {
             <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
               <Coins className="h-8 w-8 text-muted-foreground" />
             </div>
-            <h3 className="text-xl font-semibold mb-2">No positions yet</h3>
+            <h3 className="text-xl font-semibold mb-2">No liquidity modifications yet</h3>
             <p className="text-muted-foreground mb-4">
-              Create your first liquidity position to start earning fees
+              Add liquidity to a pool to start earning fees
             </p>
             <Button className="bg-gradient-primary hover:opacity-90">
               <Plus className="mr-2 h-4 w-4" />
-              Create Position
+              Add Liquidity
             </Button>
           </Card>
         ) : (
@@ -199,9 +199,9 @@ const MyPositions = () => {
 
                         <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mt-4">
                           <div>
-                            <div className="text-xs text-muted-foreground mb-1">Liquidity</div>
+                            <div className="text-xs text-muted-foreground mb-1">Liquidity Delta</div>
                             <div className="font-semibold">
-                              {parseFloat(position.liquidity).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              {parseFloat(position.liquidityDelta).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                             </div>
                           </div>
                           <div>
