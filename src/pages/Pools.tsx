@@ -2,7 +2,8 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, TrendingUp } from "lucide-react";
 import { useState } from "react";
-import { CreatePoolDialog } from "@/components/Pools/CreatePoolDialog";
+import { CreateV4PoolDialog } from "@/components/Pools/CreateV4PoolDialog";
+import { MintV4PositionDialog } from "@/components/Pools/MintV4PositionDialog";
 
 interface Pool {
   pair: string;
@@ -21,6 +22,7 @@ const MOCK_POOLS: Pool[] = [
 
 const Pools = () => {
   const [createPoolOpen, setCreatePoolOpen] = useState(false);
+  const [mintPositionOpen, setMintPositionOpen] = useState(false);
 
   return (
     <div className="min-h-[calc(100vh-73px)] bg-gradient-bg p-4 md:p-8">
@@ -35,13 +37,23 @@ const Pools = () => {
                 Provide liquidity and earn trading fees
               </p>
             </div>
-            <Button 
-              onClick={() => setCreatePoolOpen(true)}
-              className="bg-gradient-primary hover:opacity-90"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              New Position
-            </Button>
+            <div className="flex gap-2">
+              <Button 
+                onClick={() => setCreatePoolOpen(true)}
+                variant="outline"
+                className="border-glass hover:bg-muted/50"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Create Pool
+              </Button>
+              <Button 
+                onClick={() => setMintPositionOpen(true)}
+                className="bg-gradient-primary hover:opacity-90"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Mint Position
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -125,7 +137,8 @@ const Pools = () => {
           </Card>
         </div>
 
-        <CreatePoolDialog open={createPoolOpen} onOpenChange={setCreatePoolOpen} />
+        <CreateV4PoolDialog open={createPoolOpen} onOpenChange={setCreatePoolOpen} />
+        <MintV4PositionDialog open={mintPositionOpen} onOpenChange={setMintPositionOpen} />
       </div>
     </div>
   );

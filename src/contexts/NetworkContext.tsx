@@ -10,6 +10,13 @@ export interface Network {
 
 export const NETWORKS: Network[] = [
   {
+    id: "hii-testnet",
+    name: "HII Testnet",
+    chainId: 22469,
+    rpcUrl: "https://testnet-rpc.hii.network",
+    isTestnet: true,
+  },
+  {
     id: "ethereum",
     name: "Ethereum Mainnet",
     chainId: 1,
