@@ -10,9 +10,9 @@ export const UNISWAP_V4_ADDRESSES: Record<
 > = {
   22469: {
     // HII Testnet
-    poolManager: "0xYourPoolManagerAddress",
-    positionManager: "0xYourPositionManagerAddress", 
-    stateView: "0xYourStateViewAddress",
+    poolManager: "0xE82C6122a57b5A1240227b932Ad7cccd2E0102b4",
+    positionManager: "0x2a85f666cE5a5735f9E021ed00cB2655873BC97c",
+    stateView: "0x07bdd0D4129E03E0A44a8608Ed9Fb99ad9E75525",
     permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3", // Standard Permit2
   },
 };
