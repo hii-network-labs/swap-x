@@ -82,10 +82,14 @@ const MyPositions = () => {
         ) : (
           <div className="space-y-4">
             {positions.map((position) => {
-              // Mock data - in real app, fetch from blockchain using tokenId
-              const tokenPair = "TOKEN / TOKEN";
-              const feeTier = "0.05%";
-              const inRange = Math.random() > 0.3; // Mock in range status
+              // Use real data from pool if available
+              const tokenPair = position.pool 
+                ? `${position.pool.token0.symbol} / ${position.pool.token1.symbol}`
+                : "TOKEN / TOKEN";
+              const feeTier = position.pool
+                ? `${(parseInt(position.pool.feeTier) / 10000).toFixed(2)}%`
+                : "0.05%";
+              const inRange = Math.random() > 0.3; // Mock - needs on-chain data
               const positionValue = "-";
               const feesEarned = "$0.00";
               const apr = "-";
@@ -102,10 +106,14 @@ const MyPositions = () => {
                         {/* Token Icons */}
                         <div className="flex -space-x-3">
                           <div className="w-12 h-12 rounded-full border-4 border-card bg-gradient-primary flex items-center justify-center">
-                            <span className="text-sm font-bold">T</span>
+                            <span className="text-sm font-bold">
+                              {position.pool ? position.pool.token0.symbol.substring(0, 1) : "T"}
+                            </span>
                           </div>
                           <div className="w-12 h-12 rounded-full border-4 border-card bg-gradient-secondary flex items-center justify-center">
-                            <span className="text-sm font-bold">T</span>
+                            <span className="text-sm font-bold">
+                              {position.pool ? position.pool.token1.symbol.substring(0, 1) : "T"}
+                            </span>
                           </div>
                         </div>
 
