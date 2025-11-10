@@ -142,6 +142,7 @@ export async function fetchPositions(owner: string, first: number = 100, skip: n
         where: { owner: $owner }
         first: $first
         skip: $skip
+        orderDirection: desc
       ) {
         id
         tokenId
