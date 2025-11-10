@@ -1,6 +1,6 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Plus, TrendingUp, Loader2, AlertCircle, Coins, Minus } from "lucide-react";
+import { Plus, TrendingUp, Loader2, AlertCircle, Coins, Circle } from "lucide-react";
 import { useState } from "react";
 import { AddLiquidityDialog } from "@/components/Pools/AddLiquidityDialog";
 import { useSubgraphPools } from "@/hooks/useSubgraphPools";
@@ -268,30 +268,6 @@ const Pools = () => {
                   </Alert>
                 )}
 
-                {/* Summary Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                  <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
-                    <div className="text-sm text-muted-foreground mb-1">Total Positions</div>
-                    <div className="text-2xl font-bold">
-                      {positions.length}
-                    </div>
-                  </Card>
-
-                  <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
-                    <div className="text-sm text-muted-foreground mb-1">NFT Tokens</div>
-                    <div className="text-2xl font-bold text-primary">
-                      {positions.length}
-                    </div>
-                  </Card>
-
-                  <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
-                    <div className="text-sm text-muted-foreground mb-1">Transfers</div>
-                    <div className="text-2xl font-bold text-secondary">
-                      {positions.reduce((acc, p) => acc + (p.transfers?.length || 0), 0)}
-                    </div>
-                  </Card>
-                </div>
-
                 {/* Positions List */}
                 {positions.length === 0 ? (
                   <Card className="p-12 bg-card/80 backdrop-blur-xl border-glass text-center">
@@ -311,69 +287,113 @@ const Pools = () => {
                     </Button>
                   </Card>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {positions.map((position) => (
-                      <Card key={position.id} className="bg-card/80 backdrop-blur-xl border-glass overflow-hidden hover:border-primary/50 transition-colors">
-                        <div className="p-6">
-                          <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 rounded-full bg-gradient-primary flex items-center justify-center">
-                                <Coins className="h-6 w-6" />
-                              </div>
-                              <div>
-                                <h3 className="font-bold text-lg">Position #{position.tokenId}</h3>
-                                <Badge variant="outline" className="border-glass mt-1">
-                                  NFT
-                                </Badge>
-                              </div>
-                            </div>
-                          </div>
+                  <div className="space-y-4">
+                    {positions.map((position) => {
+                      // Mock data - in real app, fetch from blockchain using tokenId
+                      const tokenPair = "TOKEN / TOKEN";
+                      const feeTier = "0.05%";
+                      const inRange = Math.random() > 0.3;
+                      const positionValue = "-";
+                      const feesEarned = "$0.00";
+                      const apr = "-";
+                      const priceRange = "Full range";
+                      const minPrice = "";
+                      const maxPrice = "";
+                      
+                      return (
+                        <Card key={position.id} className="bg-card/80 backdrop-blur-xl border-glass overflow-hidden hover:border-primary/20 transition-colors">
+                          <div className="p-6">
+                            {/* Top Section */}
+                            <div className="flex items-center justify-between mb-6">
+                              <div className="flex items-center gap-4 flex-1">
+                                {/* Token Icons */}
+                                <div className="flex -space-x-3">
+                                  <div className="w-12 h-12 rounded-full border-4 border-card bg-gradient-primary flex items-center justify-center">
+                                    <span className="text-sm font-bold">T</span>
+                                  </div>
+                                  <div className="w-12 h-12 rounded-full border-4 border-card bg-gradient-secondary flex items-center justify-center">
+                                    <span className="text-sm font-bold">T</span>
+                                  </div>
+                                </div>
 
-                          <div className="space-y-3">
-                            <div>
-                              <div className="text-xs text-muted-foreground mb-1">Token ID</div>
-                              <div className="font-mono text-sm font-semibold">
-                                {position.tokenId}
-                              </div>
-                            </div>
-
-                            <div>
-                              <div className="text-xs text-muted-foreground mb-1">Owner</div>
-                              <div className="font-mono text-xs truncate">
-                                {position.owner}
-                              </div>
-                            </div>
-
-                            {position.transfers && position.transfers.length > 0 && (
-                              <div>
-                                <div className="text-xs text-muted-foreground mb-1">Transfers</div>
-                                <div className="text-sm font-semibold">
-                                  {position.transfers.length} transfer{position.transfers.length !== 1 ? 's' : ''}
+                                {/* Token Info */}
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                                    <h3 className="text-xl font-bold">{tokenPair}</h3>
+                                    <Badge variant="secondary" className="bg-muted text-muted-foreground">
+                                      v4
+                                    </Badge>
+                                    <Badge variant="secondary" className="bg-muted text-muted-foreground">
+                                      {feeTier}
+                                    </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Circle 
+                                      className={cn(
+                                        "h-2 w-2 fill-current",
+                                        inRange ? "text-green-400" : "text-red-400"
+                                      )} 
+                                    />
+                                    <span className={cn(
+                                      "text-sm font-medium",
+                                      inRange ? "text-green-400" : "text-red-400"
+                                    )}>
+                                      {inRange ? "In range" : "Out of range"}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
-                            )}
-                          </div>
 
-                          <div className="flex gap-2 mt-6">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="flex-1 border-glass hover:bg-muted/50"
-                            >
-                              View Details
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="flex-1 border-glass hover:bg-primary/20"
-                              onClick={() => setAddLiquidityOpen(true)}
-                            >
-                              Manage
-                            </Button>
+                              {/* Price Range Indicator */}
+                              <div className="flex items-center gap-2 min-w-[300px]">
+                                <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                                  <div 
+                                    className={cn(
+                                      "h-full rounded-full transition-all",
+                                      inRange ? "bg-green-400" : "bg-red-400"
+                                    )}
+                                    style={{ width: inRange ? "60%" : "100%" }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Bottom Stats Grid */}
+                            <div className="grid grid-cols-4 gap-6 pt-4 border-t border-glass">
+                              <div>
+                                <div className="text-sm text-muted-foreground mb-1">Position</div>
+                                <div className="text-lg font-semibold">{positionValue}</div>
+                              </div>
+                              
+                              <div>
+                                <div className="text-sm text-muted-foreground mb-1">Fees</div>
+                                <div className="text-lg font-semibold">{feesEarned}</div>
+                              </div>
+                              
+                              <div>
+                                <div className="text-sm text-muted-foreground mb-1">APR</div>
+                                <div className="text-lg font-semibold">{apr}</div>
+                              </div>
+                              
+                              <div>
+                                <div className="text-sm text-muted-foreground mb-1">
+                                  {minPrice && maxPrice ? "Range" : ""}
+                                </div>
+                                <div className="text-sm">
+                                  {priceRange && !minPrice && <div className="font-semibold">{priceRange}</div>}
+                                  {minPrice && (
+                                    <>
+                                      <div className="text-muted-foreground">Min {minPrice}</div>
+                                      <div className="text-muted-foreground">Max {maxPrice}</div>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </Card>
-                    ))}
+                        </Card>
+                      );
+                    })}
                   </div>
                 )}
               </>
