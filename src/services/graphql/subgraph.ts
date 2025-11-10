@@ -26,20 +26,6 @@ export interface Position {
   id: string;
   tokenId: string;
   owner: string;
-  pool?: {
-    id: string;
-    feeTier: string;
-    token0: {
-      id: string;
-      symbol: string;
-      decimals: string;
-    };
-    token1: {
-      id: string;
-      symbol: string;
-      decimals: string;
-    };
-  };
   transfers: Array<{
     id: string;
   }>;
@@ -161,20 +147,6 @@ export async function fetchPositions(owner: string, first: number = 100, skip: n
         id
         tokenId
         owner
-        pool {
-          id
-          feeTier
-          token0 {
-            id
-            symbol
-            decimals
-          }
-          token1 {
-            id
-            symbol
-            decimals
-          }
-        }
         transfers {
           id
         }
