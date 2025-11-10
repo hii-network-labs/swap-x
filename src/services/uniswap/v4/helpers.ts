@@ -82,19 +82,6 @@ export function decodePositionInfo(infoValue: bigint): {
   };
 }
 
-export function getBigIntPoolId(poolKey: {
-  currency0: Address;
-  currency1: Address;
-  fee: number;
-  tickSpacing: number;
-  hooks: Address;
-}): bigint {
-  // This is a simplified version - actual implementation depends on V4's poolId calculation
-  // You may need to use the Pool.getPoolId from SDK or calculate properly
-  const packed = `${poolKey.currency0}${poolKey.currency1}${poolKey.fee}${poolKey.tickSpacing}${poolKey.hooks}`;
-  return BigInt(packed.slice(0, 66)); // Placeholder
-}
-
 export function createCurrency(
   chainId: number,
   address: Address,

@@ -7,7 +7,7 @@ import {
   POOL_MANAGER_ABI,
   STATE_VIEW_ABI,
 } from "@/config/uniswapV4";
-import { ZERO_ADDRESS, decodePositionInfo, getBigIntPoolId } from "./helpers";
+import { ZERO_ADDRESS, decodePositionInfo } from "./helpers";
 
 export interface PoolKey {
   currency0: Address;
@@ -48,7 +48,6 @@ export async function getPool(
       tickSpacing,
       hookAddress
     );
-    const bigIntPoolId = getBigIntPoolId(poolKey);
 
     const [slot0, liquidity] = await Promise.all([
       client.readContract({
