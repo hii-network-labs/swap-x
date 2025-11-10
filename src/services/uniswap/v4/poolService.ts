@@ -68,7 +68,7 @@ export async function getPool(
     const currentTick = (slot0 as any)[1] as number;
     const currentLiquidity = liquidity as bigint;
 
-    // Create V4 Pool instance
+    // Create V4 Pool instance - SDK expects string representations of BigInt values
     const pool = new Pool(
       token0,
       token1,

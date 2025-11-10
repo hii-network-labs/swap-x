@@ -56,14 +56,21 @@ export async function mintPosition(
     const amount0Desired = token0IsA ? amount0 : amount1;
     const amount1Desired = token0IsA ? amount1 : amount0;
 
-    // Create position
+    console.log("📊 Creating position with amounts:", {
+      amount0Desired,
+      amount1Desired,
+      tickLower,
+      tickUpper
+    });
+
+    // Create position - use string amounts (SDK will handle conversion internally)
     const position = Position.fromAmounts({
       pool,
       tickLower,
       tickUpper,
       amount0: amount0Desired,
       amount1: amount1Desired,
-      useFullPrecision: true,
+      useFullPrecision: false, // Changed to false to avoid precision issues
     });
 
     console.log("💧 Liquidity:", position.liquidity.toString());
@@ -116,6 +123,9 @@ export async function mintPosition(
       }
 
       // Get Permit2 signature
+      console.log("🔑 Getting Permit2 signature...");
+      console.log("WalletClient account:", walletClient.account);
+      
       const batchPermit = await gaslessApproval(
         client,
         walletClient,
@@ -127,7 +137,10 @@ export async function mintPosition(
         token1
       );
       if (batchPermit) {
+        console.log("✅ Permit2 signature obtained");
         mintOptions.batchPermit = batchPermit;
+      } else {
+        console.log("⚠️ Skipping Permit2 - continuing without batch permit");
       }
     }
 
@@ -171,6 +184,12 @@ async function gaslessApproval(
   tokenB: Token
 ) {
   try {
+    // Check if walletClient has account
+    const account = walletClient.account || { address: userAddress };
+    if (!account.address) {
+      console.warn("⚠️ No account found in walletClient, using userAddress");
+    }
+
     const permitDetails: PermitDetails[] = [];
     const deadline = Math.floor(Date.now() / 1000) + 3600;
 
@@ -202,11 +221,10 @@ async function gaslessApproval(
       sigDeadline: deadline.toString(),
     };
 
-    const account = walletClient.account;
-    if (!account) throw new Error("No account found");
+    console.log("📝 Signing permit data with account:", account.address || userAddress);
 
     const signature = await walletClient.signTypedData({
-      account,
+      account: account.address || userAddress,
       domain: {
         name: "Permit2",
         chainId,
