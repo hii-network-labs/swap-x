@@ -376,20 +376,20 @@ const Pools = () => {
                                   </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mt-4">
-                                  <div>
-                                    <div className="text-xs text-muted-foreground mb-1">Liquidity Delta</div>
-                                    <div className="font-semibold">
-                                      {parseFloat(position.liquidityDelta).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <div className="text-xs text-muted-foreground mb-1">Tick Range</div>
-                                    <div className="font-semibold text-sm">
-                                      {position.tickLower} to {position.tickUpper}
-                                    </div>
-                                  </div>
-                                </div>
+                        <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mt-4">
+                          <div>
+                            <div className="text-xs text-muted-foreground mb-1">Pool Liquidity</div>
+                            <div className="font-semibold">
+                              {parseFloat(position.pool.liquidity).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground mb-1">Tick Range</div>
+                            <div className="font-semibold text-sm">
+                              {position.tickLower} to {position.tickUpper}
+                            </div>
+                          </div>
+                        </div>
                               </div>
 
                               {/* Actions */}

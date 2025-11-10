@@ -37,7 +37,6 @@ export interface ModifyLiquidity {
   sender: string;
   tickLower: string;
   tickUpper: string;
-  liquidityDelta: string;
   transaction: {
     id: string;
     timestamp: string;
@@ -171,7 +170,6 @@ export async function fetchModifyLiquidities(first: number = 100, skip: number =
         sender
         tickLower
         tickUpper
-        liquidityDelta
         transaction {
           id
           timestamp
@@ -219,7 +217,6 @@ export async function fetchModifyLiquiditiesBySender(sender: string, first: numb
         sender
         tickLower
         tickUpper
-        liquidityDelta
         transaction {
           id
           timestamp
