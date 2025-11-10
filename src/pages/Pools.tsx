@@ -12,8 +12,14 @@ import { useNetwork } from "@/contexts/NetworkContext";
 import { cn } from "@/lib/utils";
 
 // Helper functions for positions
-const formatFeeTier = (fee: string): string => {
-  return `${(parseInt(fee) / 10000).toFixed(2)}%`;
+const formatFeeTier = (tickSpacing: string): string => {
+  // Approximate fee tier from tick spacing
+  const spacing = parseInt(tickSpacing);
+  if (spacing === 1) return "0.01%";
+  if (spacing === 10) return "0.05%";
+  if (spacing === 60) return "0.30%";
+  if (spacing === 200) return "1.00%";
+  return `${(spacing / 10).toFixed(2)}%`;
 };
 
 const getPriceFromTick = (tick: string, token0Decimals: number, token1Decimals: number): number => {
@@ -67,7 +73,9 @@ const Pools = () => {
     // Simple APR calculation based on volume and liquidity
     const vol = parseFloat(pool.volumeToken0 || "0") + parseFloat(pool.volumeToken1 || "0");
     const liq = parseFloat(pool.liquidity || "1");
-    const fee = parseInt(pool.fee || "3000") / 1000000; // Convert fee to decimal
+    // Approximate fee based on tickSpacing (1 = 0.01%, 10 = 0.05%, 60 = 0.3%, 200 = 1%)
+    const tickSpacing = parseInt(pool.tickSpacing || "10");
+    const fee = tickSpacing === 1 ? 0.0001 : tickSpacing === 10 ? 0.0005 : tickSpacing === 60 ? 0.003 : 0.01;
     const apr = (vol * 365 * fee / liq) * 100;
     return apr > 0 ? `${apr.toFixed(2)}%` : "N/A";
   };
@@ -155,7 +163,7 @@ const Pools = () => {
                 <tbody>
                   {pools.map((pool) => {
                     const pair = `${pool.token0.symbol}/${pool.token1.symbol}`;
-                    const feeTier = `${(parseInt(pool.fee) / 10000).toFixed(2)}%`;
+                    const feeTier = `${(parseInt(pool.tickSpacing) / 10).toFixed(2)}%`;
                     
                     return (
                       <tr 
@@ -313,7 +321,7 @@ const Pools = () => {
                   <div className="space-y-4">
                     {positions.map((position) => {
                       const tokenPair = `${position.pool.token0.symbol}/${position.pool.token1.symbol}`;
-                      const feeTier = formatFeeTier(position.pool.fee);
+                      const feeTier = formatFeeTier(position.pool.tickSpacing);
                       const inRange = isInRange(position.tickLower, position.tickUpper, position.pool.tick);
                       
                       const token0Decimals = parseInt(position.pool.token0.decimals);

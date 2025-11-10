@@ -8,8 +8,14 @@ import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 // Helper to format fee tier
-const formatFeeTier = (fee: string): string => {
-  return `${(parseInt(fee) / 10000).toFixed(2)}%`;
+const formatFeeTier = (tickSpacing: string): string => {
+  // Approximate fee tier from tick spacing
+  const spacing = parseInt(tickSpacing);
+  if (spacing === 1) return "0.01%";
+  if (spacing === 10) return "0.05%";
+  if (spacing === 60) return "0.30%";
+  if (spacing === 200) return "1.00%";
+  return `${(spacing / 10).toFixed(2)}%`;
 };
 
 // Helper to calculate price from tick (using formula: 1.0001^tick)
@@ -136,7 +142,7 @@ const MyPositions = () => {
           <div className="space-y-4">
             {positions.map((position) => {
               const tokenPair = `${position.pool.token0.symbol}/${position.pool.token1.symbol}`;
-              const feeTier = formatFeeTier(position.pool.fee);
+              const feeTier = formatFeeTier(position.pool.tickSpacing);
               const inRange = isInRange(position.tickLower, position.tickUpper, position.pool.tick);
               
               const token0Decimals = parseInt(position.pool.token0.decimals);

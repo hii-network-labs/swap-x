@@ -14,10 +14,8 @@ export interface Pool {
     name: string;
     decimals: string;
   };
-  fee: string;
   tickSpacing: string;
   liquidity: string;
-  sqrtPriceX96: string;
   tick: string;
   volumeToken0: string;
   volumeToken1: string;
@@ -92,10 +90,8 @@ export async function fetchPools(first: number = 100, skip: number = 0): Promise
           name
           decimals
         }
-        fee
         tickSpacing
         liquidity
-        sqrtPriceX96
         tick
         volumeToken0
         volumeToken1
@@ -125,10 +121,8 @@ export async function fetchPool(poolId: string): Promise<Pool | null> {
           name
           decimals
         }
-        fee
         tickSpacing
         liquidity
-        sqrtPriceX96
         tick
         volumeToken0
         volumeToken1
@@ -182,10 +176,8 @@ export async function fetchPositions(owner: string, first: number = 100, skip: n
             name
             decimals
           }
-          fee
           tickSpacing
           liquidity
-          sqrtPriceX96
           tick
           volumeToken0
           volumeToken1
@@ -234,10 +226,8 @@ export async function fetchPosition(positionId: string): Promise<Position | null
             name
             decimals
           }
-          fee
           tickSpacing
           liquidity
-          sqrtPriceX96
           tick
           volumeToken0
           volumeToken1
