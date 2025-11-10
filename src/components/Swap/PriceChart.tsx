@@ -73,9 +73,74 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
 
   if (!fromToken || !toToken) {
     return (
-      <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
-        <div className="text-center text-muted-foreground">
-          Chọn cả hai token để xem biểu đồ giá
+      <Card className="p-8 bg-card/80 backdrop-blur-xl border-glass">
+        <div className="space-y-6">
+          <div className="text-center space-y-3">
+            <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
+              <svg 
+                className="w-8 h-8 text-primary" 
+                fill="none" 
+                stroke="currentColor" 
+                viewBox="0 0 24 24"
+              >
+                <path 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round" 
+                  strokeWidth={2} 
+                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" 
+                />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-xl font-bold mb-2">Biểu đồ giá thời gian thực</h3>
+              <p className="text-muted-foreground text-sm">
+                Chọn cả hai token để xem biểu đồ giá và xu hướng thị trường
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-glass pt-6 space-y-4">
+            <h4 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+              Tính năng
+            </h4>
+            <div className="grid gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="font-medium text-sm">Dữ liệu thời gian thực</div>
+                  <div className="text-xs text-muted-foreground">Cập nhật giá liên tục từ CoinGecko</div>
+                </div>
+              </div>
+              
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="font-medium text-sm">Nhiều khung thời gian</div>
+                  <div className="text-xs text-muted-foreground">Xem biểu đồ 24H, 7D, và 30D</div>
+                </div>
+              </div>
+              
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="font-medium text-sm">Thống kê chi tiết</div>
+                  <div className="text-xs text-muted-foreground">Giá cao nhất, thấp nhất và trung bình</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </Card>
     );
