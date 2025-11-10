@@ -12,7 +12,6 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useV4Provider } from "@/hooks/useV4Provider";
-import { useWeb3Provider } from "@/hooks/useWeb3Provider";
 import { toast } from "@/hooks/use-toast";
 import { Token } from "@uniswap/sdk-core";
 import { mintPosition } from "@/services/uniswap/v4/positionService";
@@ -38,7 +37,6 @@ const TICK_SPACINGS = [
 export function MintV4PositionDialog({ open, onOpenChange }: MintV4PositionDialogProps) {
   const { currentNetwork, walletAddress } = useNetwork();
   const { publicClient, walletClient } = useV4Provider();
-  const { provider, signer } = useWeb3Provider();
 
   const [token0Address, setToken0Address] = useState("");
   const [token1Address, setToken1Address] = useState("");
@@ -69,10 +67,10 @@ export function MintV4PositionDialog({ open, onOpenChange }: MintV4PositionDialo
       return;
     }
 
-    if (!publicClient || !walletClient || !provider || !signer) {
+    if (!publicClient || !walletClient) {
       toast({
         title: "Provider Error",
-        description: "Providers not available",
+        description: "V4 providers not available",
         variant: "destructive",
       });
       return;
@@ -94,8 +92,6 @@ export function MintV4PositionDialog({ open, onOpenChange }: MintV4PositionDialo
         walletClient,
         currentNetwork.chainId,
         walletAddress as `0x${string}`,
-        provider,
-        signer,
         parseInt(fee),
         parseInt(tickSpacing),
         "0x0000000000000000000000000000000000000000",

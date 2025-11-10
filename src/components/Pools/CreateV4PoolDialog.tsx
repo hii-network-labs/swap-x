@@ -12,7 +12,6 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useV4Provider } from "@/hooks/useV4Provider";
-import { useWeb3Provider } from "@/hooks/useWeb3Provider";
 import { toast } from "@/hooks/use-toast";
 import { Token } from "@uniswap/sdk-core";
 import { initializePool } from "@/services/uniswap/v4/poolService";
@@ -38,7 +37,6 @@ const TICK_SPACINGS = [
 export function CreateV4PoolDialog({ open, onOpenChange }: CreateV4PoolDialogProps) {
   const { currentNetwork, walletAddress } = useNetwork();
   const { publicClient, walletClient } = useV4Provider();
-  const { provider, signer } = useWeb3Provider();
 
   const [token0Address, setToken0Address] = useState("");
   const [token1Address, setToken1Address] = useState("");

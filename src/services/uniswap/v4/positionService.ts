@@ -11,7 +11,6 @@ import {
 } from "@/config/uniswapV4";
 import { getPool } from "./poolService";
 import { ZERO_ADDRESS, isNativeETH } from "./helpers";
-import { ethers } from "ethers";
 
 const AMOUNT_MAX = 2n ** 256n - 1n;
 
@@ -20,8 +19,6 @@ export async function mintPosition(
   walletClient: any,
   chainId: number,
   account: Address,
-  provider: ethers.BrowserProvider,
-  signer: ethers.Signer,
   fee: number,
   tickSpacing: number,
   hookAddress: Address,
@@ -93,18 +90,28 @@ export async function mintPosition(
       console.log("🔑 Approving tokens for Permit2...");
 
       if (!token0.isNative) {
-        const token0Contract = new ethers.Contract(token0.address, ERC20_ABI, signer);
-        const tx0 = await token0Contract.approve(addresses.permit2, AMOUNT_MAX.toString());
-        console.log(`⏳ Waiting for Token0 Approve TX: ${tx0.hash}`);
-        await tx0.wait();
+        const hash0 = await walletClient.writeContract({
+          account,
+          address: token0.address as Address,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [addresses.permit2 as Address, AMOUNT_MAX],
+        });
+        console.log(`⏳ Waiting for Token0 Approve TX: ${hash0}`);
+        await client.waitForTransactionReceipt({ hash: hash0 });
         console.log(`✅ Token0 Approved!`);
       }
 
       if (!token1.isNative) {
-        const token1Contract = new ethers.Contract(token1.address, ERC20_ABI, signer);
-        const tx1 = await token1Contract.approve(addresses.permit2, AMOUNT_MAX.toString());
-        console.log(`⏳ Waiting for Token1 Approve TX: ${tx1.hash}`);
-        await tx1.wait();
+        const hash1 = await walletClient.writeContract({
+          account,
+          address: token1.address as Address,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [addresses.permit2 as Address, AMOUNT_MAX],
+        });
+        console.log(`⏳ Waiting for Token1 Approve TX: ${hash1}`);
+        await client.waitForTransactionReceipt({ hash: hash1 });
         console.log(`✅ Token1 Approved!`);
       }
 
