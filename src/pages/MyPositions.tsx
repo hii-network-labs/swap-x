@@ -104,14 +104,14 @@ const MyPositions = () => {
           <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
             <div className="text-sm text-muted-foreground mb-1">In Range</div>
             <div className="text-2xl font-bold text-green-400">
-              {positions.filter(p => isInRange(p.tickLower, p.tickUpper, p.pool.tick)).length}
+              {positions.filter(p => p.pool && isInRange(p.tickLower, p.tickUpper, p.pool.tick)).length}
             </div>
           </Card>
 
           <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
             <div className="text-sm text-muted-foreground mb-1">Out of Range</div>
             <div className="text-2xl font-bold text-orange-400">
-              {positions.filter(p => !isInRange(p.tickLower, p.tickUpper, p.pool.tick)).length}
+              {positions.filter(p => p.pool && !isInRange(p.tickLower, p.tickUpper, p.pool.tick)).length}
             </div>
           </Card>
 
@@ -140,7 +140,7 @@ const MyPositions = () => {
           </Card>
         ) : (
           <div className="space-y-4">
-            {positions.map((position) => {
+            {positions.filter(p => p.pool).map((position) => {
               const tokenPair = `${position.pool.token0.symbol}/${position.pool.token1.symbol}`;
               const feeTier = formatFeeTier(position.pool.tickSpacing);
               const inRange = isInRange(position.tickLower, position.tickUpper, position.pool.tick);
