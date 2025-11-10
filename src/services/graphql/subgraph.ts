@@ -1,4 +1,4 @@
-const SUBGRAPH_URL = "https://graph-node.sb.teknix.dev/subgraphs/name/subgraph-swap-hii-3/graphql";
+const SUBGRAPH_URL = "https://graph-node.sb.teknix.dev/subgraphs/name/subgraph-swap-hii-3";
 
 export interface Pool {
   id: string;
