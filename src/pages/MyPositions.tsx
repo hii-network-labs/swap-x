@@ -3,18 +3,34 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ArrowUpRight, ArrowDownRight, Coins, Plus, Minus, Loader2, AlertCircle } from "lucide-react";
 import { useNetwork } from "@/contexts/NetworkContext";
-import { usePositions } from "@/hooks/usePositions";
+import { useSubgraphPositions } from "@/hooks/useSubgraphPositions";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 // Helper to format fee tier
-const formatFeeTier = (fee: number): string => {
-  return `${(fee / 10000).toFixed(2)}%`;
+const formatFeeTier = (fee: string): string => {
+  return `${(parseInt(fee) / 10000).toFixed(2)}%`;
+};
+
+// Helper to calculate price from tick (using formula: 1.0001^tick)
+const getPriceFromTick = (tick: string, token0Decimals: number, token1Decimals: number): number => {
+  const tickNum = parseInt(tick);
+  const price = Math.pow(1.0001, tickNum);
+  const adjustedPrice = price * (10 ** (token0Decimals - token1Decimals));
+  return adjustedPrice;
+};
+
+// Check if position is in range
+const isInRange = (tickLower: string, tickUpper: string, currentTick: string): boolean => {
+  const lower = parseInt(tickLower);
+  const upper = parseInt(tickUpper);
+  const current = parseInt(currentTick);
+  return current >= lower && current <= upper;
 };
 
 const MyPositions = () => {
   const { walletAddress } = useNetwork();
-  const { positions, isLoading, error, isSupported } = usePositions();
+  const { positions, isLoading, error } = useSubgraphPositions();
 
   if (!walletAddress) {
     return (
@@ -32,28 +48,6 @@ const MyPositions = () => {
     );
   }
 
-  if (!isSupported) {
-    return (
-      <div className="min-h-[calc(100vh-73px)] bg-gradient-bg p-4 md:p-8">
-        <div className="container mx-auto max-w-7xl">
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold mb-2 bg-gradient-primary bg-clip-text text-transparent">
-              My Positions
-            </h1>
-            <p className="text-muted-foreground">
-              Manage your liquidity positions and track earnings
-            </p>
-          </div>
-          <Alert className="border-orange-500/50 bg-orange-500/10">
-            <AlertCircle className="h-4 w-4 text-orange-400" />
-            <AlertDescription className="text-orange-400">
-              Uniswap V3 is not supported on this network. Please switch to Ethereum, Sepolia, or BSC.
-            </AlertDescription>
-          </Alert>
-        </div>
-      </div>
-    );
-  }
 
   if (isLoading) {
     return (
@@ -104,14 +98,14 @@ const MyPositions = () => {
           <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
             <div className="text-sm text-muted-foreground mb-1">In Range</div>
             <div className="text-2xl font-bold text-green-400">
-              {positions.filter(p => p.inRange).length}
+              {positions.filter(p => isInRange(p.tickLower, p.tickUpper, p.pool.tick)).length}
             </div>
           </Card>
 
           <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
             <div className="text-sm text-muted-foreground mb-1">Out of Range</div>
             <div className="text-2xl font-bold text-orange-400">
-              {positions.filter(p => !p.inRange).length}
+              {positions.filter(p => !isInRange(p.tickLower, p.tickUpper, p.pool.tick)).length}
             </div>
           </Card>
 
@@ -143,9 +137,17 @@ const MyPositions = () => {
             {positions.map((position) => {
               const tokenPair = `${position.pool.token0.symbol}/${position.pool.token1.symbol}`;
               const feeTier = formatFeeTier(position.pool.fee);
+              const inRange = isInRange(position.tickLower, position.tickUpper, position.pool.tick);
+              
+              const token0Decimals = parseInt(position.pool.token0.decimals);
+              const token1Decimals = parseInt(position.pool.token1.decimals);
+              
+              const lowerPrice = getPriceFromTick(position.tickLower, token0Decimals, token1Decimals);
+              const upperPrice = getPriceFromTick(position.tickUpper, token0Decimals, token1Decimals);
+              const currentPrice = getPriceFromTick(position.pool.tick, token0Decimals, token1Decimals);
               
               return (
-                <Card key={position.tokenId} className="bg-card/80 backdrop-blur-xl border-glass overflow-hidden">
+                <Card key={position.id} className="bg-card/80 backdrop-blur-xl border-glass overflow-hidden">
                   <div className="p-6">
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                       {/* Position Info */}
@@ -170,35 +172,26 @@ const MyPositions = () => {
                                 {feeTier}
                               </Badge>
                               <Badge 
-                                variant={position.inRange ? "default" : "outline"}
+                                variant={inRange ? "default" : "outline"}
                                 className={cn(
-                                  position.inRange
+                                  inRange
                                     ? "bg-green-500/20 text-green-400 border-green-500/50" 
                                     : "bg-orange-500/20 text-orange-400 border-orange-500/50"
                                 )}
                               >
-                                {position.inRange ? "In Range" : "Out of Range"}
+                                {inRange ? "In Range" : "Out of Range"}
                               </Badge>
                             </div>
                             <div className="text-sm text-muted-foreground mt-1">
-                              Price range: {position.priceRange.lower.toFixed(4)} - {position.priceRange.upper.toFixed(4)}
+                              Price range: {lowerPrice.toFixed(6)} - {upperPrice.toFixed(6)}
                             </div>
                             <div className="text-sm text-muted-foreground">
-                              Current price: {position.priceRange.current.toFixed(4)} {position.pool.token1.symbol}/{position.pool.token0.symbol}
+                              Current price: {currentPrice.toFixed(6)} {position.pool.token1.symbol}/{position.pool.token0.symbol}
                             </div>
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
-                          <div>
-                            <div className="text-xs text-muted-foreground mb-1">Token Amounts</div>
-                            <div className="font-semibold text-sm">
-                              {parseFloat(position.token0Amount).toFixed(6)} {position.pool.token0.symbol}
-                            </div>
-                            <div className="font-semibold text-sm">
-                              {parseFloat(position.token1Amount).toFixed(6)} {position.pool.token1.symbol}
-                            </div>
-                          </div>
+                        <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mt-4">
                           <div>
                             <div className="text-xs text-muted-foreground mb-1">Liquidity</div>
                             <div className="font-semibold">
@@ -206,12 +199,9 @@ const MyPositions = () => {
                             </div>
                           </div>
                           <div>
-                            <div className="text-xs text-muted-foreground mb-1">Unclaimed Fees</div>
-                            <div className="font-semibold text-primary text-sm">
-                              {(parseFloat(position.unclaimedFees0) / 10 ** position.pool.token0.decimals).toFixed(6)} {position.pool.token0.symbol}
-                            </div>
-                            <div className="font-semibold text-primary text-sm">
-                              {(parseFloat(position.unclaimedFees1) / 10 ** position.pool.token1.decimals).toFixed(6)} {position.pool.token1.symbol}
+                            <div className="text-xs text-muted-foreground mb-1">Tick Range</div>
+                            <div className="font-semibold text-sm">
+                              {position.tickLower} to {position.tickUpper}
                             </div>
                           </div>
                         </div>
