@@ -43,6 +43,55 @@ export interface ModifyLiquidity {
   };
 }
 
+export interface GraphTransaction {
+  id: string;
+  blockNumber: string;
+  timestamp: string;
+  gasLimit: string;
+  gasPrice: string;
+  swaps: Array<{
+    id: string;
+    sender: string;
+    amount0: string;
+    amount1: string;
+    pool: {
+      id: string;
+      token0: {
+        id: string;
+        symbol: string;
+        name: string;
+        decimals: string;
+      };
+      token1: {
+        id: string;
+        symbol: string;
+        name: string;
+        decimals: string;
+      };
+    };
+  }>;
+  modifyLiquidities: Array<{
+    id: string;
+    sender: string;
+    liquidityDelta: string;
+    pool: {
+      id: string;
+      token0: {
+        id: string;
+        symbol: string;
+        name: string;
+        decimals: string;
+      };
+      token1: {
+        id: string;
+        symbol: string;
+        name: string;
+        decimals: string;
+      };
+    };
+  }>;
+}
+
 async function fetchGraphQL(query: string, variables?: Record<string, any>) {
   const response = await fetch(SUBGRAPH_URL, {
     method: "POST",
@@ -267,4 +316,67 @@ export async function fetchPosition(positionId: string): Promise<Position | null
 
   const data = await fetchGraphQL(query, { id: positionId });
   return data.position || null;
+}
+
+export async function fetchTransactions(first: number = 100, skip: number = 0): Promise<GraphTransaction[]> {
+  const query = `
+    query GetTransactions($first: Int!, $skip: Int!) {
+      transactions(
+        first: $first
+        skip: $skip
+        orderBy: timestamp
+        orderDirection: desc
+      ) {
+        id
+        blockNumber
+        timestamp
+        gasLimit
+        gasPrice
+        swaps {
+          id
+          sender
+          amount0
+          amount1
+          pool {
+            id
+            token0 {
+              id
+              symbol
+              name
+              decimals
+            }
+            token1 {
+              id
+              symbol
+              name
+              decimals
+            }
+          }
+        }
+        modifyLiquidities {
+          id
+          sender
+          liquidityDelta
+          pool {
+            id
+            token0 {
+              id
+              symbol
+              name
+              decimals
+            }
+            token1 {
+              id
+              symbol
+              name
+              decimals
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await fetchGraphQL(query, { first, skip });
+  return data.transactions || [];
 }
