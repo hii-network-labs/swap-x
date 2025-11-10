@@ -47,33 +47,11 @@ export interface GraphTransaction {
   id: string;
   blockNumber: string;
   timestamp: string;
-  gasLimit: string;
-  gasPrice: string;
   swaps: Array<{
     id: string;
     sender: string;
     amount0: string;
     amount1: string;
-    pool: {
-      id: string;
-      token0: {
-        id: string;
-        symbol: string;
-        name: string;
-        decimals: string;
-      };
-      token1: {
-        id: string;
-        symbol: string;
-        name: string;
-        decimals: string;
-      };
-    };
-  }>;
-  modifyLiquidities: Array<{
-    id: string;
-    sender: string;
-    liquidityDelta: string;
     pool: {
       id: string;
       token0: {
@@ -330,33 +308,11 @@ export async function fetchTransactions(first: number = 100, skip: number = 0): 
         id
         blockNumber
         timestamp
-        gasLimit
-        gasPrice
         swaps {
           id
           sender
           amount0
           amount1
-          pool {
-            id
-            token0 {
-              id
-              symbol
-              name
-              decimals
-            }
-            token1 {
-              id
-              symbol
-              name
-              decimals
-            }
-          }
-        }
-        modifyLiquidities {
-          id
-          sender
-          liquidityDelta
           pool {
             id
             token0 {

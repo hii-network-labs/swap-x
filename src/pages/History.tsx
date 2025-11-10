@@ -158,62 +158,6 @@ const History = () => {
                           </TableCell>
                         </TableRow>
                       ))}
-                      {tx.modifyLiquidities.map((modifyLiq) => (
-                        <TableRow key={`${tx.id}-${modifyLiq.id}`}>
-                          <TableCell className="font-medium whitespace-nowrap">
-                            {formatDate(tx.timestamp)}
-                          </TableCell>
-                          <TableCell>
-                            <Badge 
-                              variant="secondary" 
-                              className={
-                                parseFloat(modifyLiq.liquidityDelta) > 0
-                                  ? "bg-green-500/20 text-green-400 border-green-500/30"
-                                  : "bg-red-500/20 text-red-400 border-red-500/30"
-                              }
-                            >
-                              {parseFloat(modifyLiq.liquidityDelta) > 0 ? (
-                                <TrendingUp className="h-3 w-3 mr-1" />
-                              ) : (
-                                <TrendingDown className="h-3 w-3 mr-1" />
-                              )}
-                              {parseFloat(modifyLiq.liquidityDelta) > 0 ? "Add" : "Remove"} Liquidity
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <div className="flex -space-x-2">
-                                <div className="w-8 h-8 rounded-full border-2 border-card bg-gradient-primary flex items-center justify-center text-xs font-bold">
-                                  {modifyLiq.pool.token0.symbol.substring(0, 1)}
-                                </div>
-                                <div className="w-8 h-8 rounded-full border-2 border-card bg-gradient-secondary flex items-center justify-center text-xs font-bold">
-                                  {modifyLiq.pool.token1.symbol.substring(0, 1)}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="font-medium">
-                                  {modifyLiq.pool.token0.symbol} / {modifyLiq.pool.token1.symbol}
-                                </div>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="text-sm">
-                              <div className="font-medium">
-                                Liquidity Δ: {parseFloat(modifyLiq.liquidityDelta).toExponential(2)}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-mono text-sm">
-                              {modifyLiq.sender.substring(0, 6)}...{modifyLiq.sender.substring(38)}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {tx.blockNumber}
-                          </TableCell>
-                        </TableRow>
-                      ))}
                     </>
                   ))}
                 </TableBody>
