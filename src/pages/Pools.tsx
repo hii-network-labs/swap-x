@@ -38,6 +38,7 @@ const isInRange = (tickLower: string, tickUpper: string, currentTick: string): b
 
 const Pools = () => {
   const [addLiquidityOpen, setAddLiquidityOpen] = useState(false);
+  const [addLiquidityPreset, setAddLiquidityPreset] = useState<{ token0?: string; token1?: string; fee?: string }>({});
   const { pools, isLoading, error } = useSubgraphPools();
   const { positions, isLoading: positionsLoading, error: positionsError } = useSubgraphPositions();
   const { walletAddress } = useNetwork();
@@ -94,7 +95,10 @@ const Pools = () => {
               </p>
             </div>
             <Button 
-              onClick={() => setAddLiquidityOpen(true)}
+              onClick={() => {
+                setAddLiquidityPreset({});
+                setAddLiquidityOpen(true);
+              }}
               className="bg-gradient-primary hover:opacity-90"
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -164,6 +168,13 @@ const Pools = () => {
                   {pools.map((pool) => {
                     const pair = `${pool.token0.symbol}/${pool.token1.symbol}`;
                     const feeTier = `${(parseInt(pool.tickSpacing) / 10).toFixed(2)}%`;
+                    const mappedFee = (() => {
+                      const spacing = String(pool.tickSpacing);
+                      if (spacing === "10") return "500";
+                      if (spacing === "60") return "3000";
+                      if (spacing === "200") return "10000";
+                      return "3000";
+                    })();
                     
                     return (
                       <tr 
@@ -202,7 +213,14 @@ const Pools = () => {
                             variant="outline" 
                             size="sm"
                             className="border-glass hover:bg-muted/50"
-                            onClick={() => setAddLiquidityOpen(true)}
+                            onClick={() => {
+                              setAddLiquidityPreset({
+                                token0: pool.token0.id,
+                                token1: pool.token1.id,
+                                fee: mappedFee,
+                              });
+                              setAddLiquidityOpen(true);
+                            }}
                           >
                             Add Liquidity
                           </Button>
@@ -401,7 +419,13 @@ const Pools = () => {
           </TabsContent>
         </Tabs>
 
-      <AddLiquidityDialog open={addLiquidityOpen} onOpenChange={setAddLiquidityOpen} />
+      <AddLiquidityDialog 
+        open={addLiquidityOpen} 
+        onOpenChange={setAddLiquidityOpen}
+        initialToken0={addLiquidityPreset.token0}
+        initialToken1={addLiquidityPreset.token1}
+        initialFee={addLiquidityPreset.fee}
+      />
       </div>
     </div>
   );

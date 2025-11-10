@@ -6,6 +6,8 @@ export const UNISWAP_V4_ADDRESSES: Record<
     positionManager: string;
     stateView: string;
     permit2: string;
+    quoter?: string;
+    universalRouter?: string;
   }
 > = {
   22469: {
@@ -14,6 +16,8 @@ export const UNISWAP_V4_ADDRESSES: Record<
     positionManager: "0x2a85f666cE5a5735f9E021ed00cB2655873BC97c",
     stateView: "0x07bdd0D4129E03E0A44a8608Ed9Fb99ad9E75525",
     permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3", // Standard Permit2
+    quoter: "0x015B26F6DeF17e8Eb1aB687E13D4454fc4A5fD36",
+    universalRouter: "0x552baC34b351639a8A3D8181d258Bd9e9dDD8fBD",
   },
 };
 
@@ -99,6 +103,13 @@ export const POSITION_MANAGER_ABI = [
 
 export const STATE_VIEW_ABI = [
   {
+    inputs: [],
+    name: "poolManager",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
     inputs: [{ name: "poolId", type: "bytes32" }],
     name: "getSlot0",
     outputs: [
@@ -114,6 +125,44 @@ export const STATE_VIEW_ABI = [
     inputs: [{ name: "poolId", type: "bytes32" }],
     name: "getLiquidity",
     outputs: [{ name: "liquidity", type: "uint128" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+export const QUOTER_ABI = [
+  {
+    inputs: [],
+    name: "poolManager",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+        name: "poolKey",
+        type: "tuple",
+      },
+      { name: "zeroForOne", type: "bool" },
+      { name: "exactAmount", type: "uint256" },
+      { name: "hookData", type: "bytes" },
+    ],
+    name: "quoteExactInputSingle",
+    outputs: [
+      {
+        components: [{ name: "amountOut", type: "uint256" }],
+        name: "quotedAmountOut",
+        type: "tuple",
+      },
+    ],
     stateMutability: "view",
     type: "function",
   },

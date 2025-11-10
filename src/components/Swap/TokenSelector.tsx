@@ -25,13 +25,19 @@ const POPULAR_TOKENS: Token[] = [
 interface TokenSelectorProps {
   selectedToken: Token | null;
   onSelectToken: (token: Token) => void;
+  tokens?: Token[];
+  allowedAddresses?: string[];
 }
 
-export const TokenSelector = ({ selectedToken, onSelectToken }: TokenSelectorProps) => {
+export const TokenSelector = ({ selectedToken, onSelectToken, tokens, allowedAddresses }: TokenSelectorProps) => {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const filteredTokens = POPULAR_TOKENS.filter(token =>
+  const baseTokens = (tokens && tokens.length > 0) ? tokens : POPULAR_TOKENS;
+  const byAllowed = allowedAddresses && allowedAddresses.length > 0
+    ? baseTokens.filter(t => allowedAddresses.includes(t.address.toLowerCase()))
+    : baseTokens;
+  const filteredTokens = byAllowed.filter(token =>
     token.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
     token.name.toLowerCase().includes(searchQuery.toLowerCase())
   );

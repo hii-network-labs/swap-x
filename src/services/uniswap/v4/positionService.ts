@@ -63,14 +63,14 @@ export async function mintPosition(
       tickUpper
     });
 
-    // Create position - use string amounts (SDK will handle conversion internally)
+    // Create position - use string amounts to satisfy BigintIsh
     const position = Position.fromAmounts({
       pool,
       tickLower,
       tickUpper,
       amount0: amount0Desired,
       amount1: amount1Desired,
-      useFullPrecision: false, // Changed to false to avoid precision issues
+      useFullPrecision: false,
     });
 
     console.log("💧 Liquidity:", position.liquidity.toString());

@@ -14,5 +14,15 @@ export default defineConfig(({ mode }) => ({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+    // Ensure a single instance of these dependencies across the bundle
+    dedupe: [
+      "jsbi",
+      "@uniswap/sdk-core",
+      "@uniswap/v3-sdk",
+      "@uniswap/v4-sdk",
+    ],
+  },
+  optimizeDeps: {
+    include: ["jsbi"],
   },
 }));
