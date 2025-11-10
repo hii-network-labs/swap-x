@@ -8,7 +8,7 @@ import { getPoolInfo, createPoolInstance, getPriceFromTick } from "./poolService
  * Get token info from contract
  */
 const getTokenInfo = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   tokenAddress: string
 ): Promise<TokenInfo> => {
   const tokenContract = new ethers.Contract(
@@ -39,7 +39,7 @@ const getTokenInfo = async (
  * Get all position token IDs for a wallet
  */
 export const getPositionTokenIds = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   chainId: number,
   walletAddress: string
 ): Promise<string[]> => {
@@ -69,7 +69,7 @@ export const getPositionTokenIds = async (
  * Get position details by token ID
  */
 export const getPositionDetails = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   chainId: number,
   tokenId: string
 ): Promise<UniswapPosition> => {
@@ -107,7 +107,7 @@ export const getPositionDetails = async (
  * Calculate position values with pool data
  */
 export const calculatePositionValues = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   chainId: number,
   position: UniswapPosition
 ): Promise<PositionWithValues> => {
@@ -185,7 +185,7 @@ export const calculatePositionValues = async (
  * Get all positions for a wallet with calculated values
  */
 export const getAllPositions = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   chainId: number,
   walletAddress: string
 ): Promise<PositionWithValues[]> => {
@@ -216,12 +216,12 @@ export const getAllPositions = async (
  * Collect fees from a position
  */
 export const collectFees = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   chainId: number,
   tokenId: string,
   recipient: string,
   signer: ethers.Signer
-): Promise<ethers.ContractTransactionResponse> => {
+): Promise<ethers.ContractTransaction> => {
   const addresses = getUniswapAddresses(chainId);
   if (!addresses) {
     throw new Error(`Unsupported network: ${chainId}`);

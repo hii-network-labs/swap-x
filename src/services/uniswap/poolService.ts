@@ -8,7 +8,7 @@ import { PoolInfo, PoolSlot0, TokenInfo } from "@/types/uniswap";
  * Get pool address from factory
  */
 export const getPoolAddress = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   chainId: number,
   token0: string,
   token1: string,
@@ -22,7 +22,7 @@ export const getPoolAddress = async (
   const factory = new ethers.Contract(addresses.factory, FACTORY_ABI, provider);
   const poolAddress = await factory.getPool(token0, token1, fee);
   
-  if (poolAddress === ethers.ZeroAddress) {
+  if (poolAddress === ethers.constants.AddressZero) {
     throw new Error(`Pool not found for ${token0}/${token1} with fee ${fee}`);
   }
 
@@ -33,7 +33,7 @@ export const getPoolAddress = async (
  * Get pool slot0 data (price, tick, etc)
  */
 export const getPoolSlot0 = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   poolAddress: string
 ): Promise<PoolSlot0> => {
   const pool = new ethers.Contract(poolAddress, POOL_ABI, provider);
@@ -54,7 +54,7 @@ export const getPoolSlot0 = async (
  * Get pool liquidity
  */
 export const getPoolLiquidity = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   poolAddress: string
 ): Promise<string> => {
   const pool = new ethers.Contract(poolAddress, POOL_ABI, provider);
@@ -112,7 +112,7 @@ export const getPriceFromTick = (
  * Get complete pool information
  */
 export const getPoolInfo = async (
-  provider: ethers.Provider,
+  provider: ethers.providers.Provider,
   chainId: number,
   poolAddress: string,
   token0Info: TokenInfo,

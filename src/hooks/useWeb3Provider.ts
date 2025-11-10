@@ -3,7 +3,7 @@ import { ethers } from "ethers";
 import { useNetwork } from "@/contexts/NetworkContext";
 
 interface Web3State {
-  provider: ethers.BrowserProvider | null;
+  provider: ethers.providers.Web3Provider | null;
   signer: ethers.Signer | null;
   isConnected: boolean;
   error: string | null;
@@ -39,8 +39,8 @@ export const useWeb3Provider = () => {
           return;
         }
 
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const signer = await provider.getSigner();
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        const signer = provider.getSigner();
 
         setState({
           provider,
@@ -64,7 +64,7 @@ export const useWeb3Provider = () => {
     if (!currentNetwork.rpcUrl) {
       throw new Error("No RPC URL configured for current network");
     }
-    return new ethers.JsonRpcProvider(currentNetwork.rpcUrl);
+    return new ethers.providers.JsonRpcProvider(currentNetwork.rpcUrl);
   };
 
   return {

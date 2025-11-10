@@ -21,15 +21,13 @@ export const fetchTokenInfo = async (
     console.log(`Fetching token info for ${tokenAddress} on chain ${chainId} using RPC: ${rpcUrl}`);
     
     // Validate address format
-    if (!ethers.isAddress(tokenAddress)) {
+    if (!ethers.utils.isAddress(tokenAddress)) {
       console.error("Invalid address format:", tokenAddress);
       throw new Error("Invalid address format");
     }
 
-    // Create provider with timeout
-    const provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
-      staticNetwork: true,
-    });
+    // Create provider
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
 
     // Create contract instance
     const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
@@ -84,11 +82,11 @@ export const getTokenBalance = async (
   rpcUrl: string
 ): Promise<string | null> => {
   try {
-    if (!ethers.isAddress(tokenAddress) || !ethers.isAddress(walletAddress)) {
+    if (!ethers.utils.isAddress(tokenAddress) || !ethers.utils.isAddress(walletAddress)) {
       return null;
     }
 
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
     const contract = new ethers.Contract(
       tokenAddress,
       ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"],
@@ -101,7 +99,7 @@ export const getTokenBalance = async (
     ]);
 
     // Format balance to human readable number
-    return ethers.formatUnits(balance, decimals);
+    return ethers.utils.formatUnits(balance, decimals);
   } catch (error) {
     console.error("Error fetching token balance:", error);
     return null;
@@ -116,15 +114,15 @@ export const getNativeBalance = async (
   rpcUrl: string
 ): Promise<string | null> => {
   try {
-    if (!ethers.isAddress(walletAddress)) {
+    if (!ethers.utils.isAddress(walletAddress)) {
       return null;
     }
 
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
     const balance = await provider.getBalance(walletAddress);
 
     // Native tokens typically have 18 decimals
-    return ethers.formatEther(balance);
+    return ethers.utils.formatEther(balance);
   } catch (error) {
     console.error("Error fetching native balance:", error);
     return null;
@@ -141,14 +139,12 @@ export const isValidERC20 = async (
   try {
     console.log(`Verifying ERC20 contract at ${tokenAddress}`);
     
-    if (!ethers.isAddress(tokenAddress)) {
+    if (!ethers.utils.isAddress(tokenAddress)) {
       console.log("Invalid address format");
       return false;
     }
 
-    const provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
-      staticNetwork: true,
-    });
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
     
     // Check if there's code at the address
     const code = await provider.getCode(tokenAddress);
