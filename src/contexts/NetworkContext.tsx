@@ -66,9 +66,60 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
   const [currentNetwork, setCurrentNetwork] = useState<Network>(NETWORKS[0]);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
 
+  // Auto-switch to chain 22469 when wallet connects
+  const handleSetWalletAddress = async (address: string | null) => {
+    setWalletAddress(address);
+    
+    if (address && window.ethereum) {
+      try {
+        const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+        const currentChainId = parseInt(chainId, 16);
+        
+        // If not on HII Testnet (22469), switch to it
+        if (currentChainId !== 22469) {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: '0x57C5' }], // 22469 in hex
+            });
+            setCurrentNetwork(NETWORKS[0]); // HII Testnet
+          } catch (switchError: any) {
+            // Chain not added, add it
+            if (switchError.code === 4902) {
+              await window.ethereum.request({
+                method: 'wallet_addEthereumChain',
+                params: [{
+                  chainId: '0x57C5',
+                  chainName: 'HII Testnet',
+                  nativeCurrency: {
+                    name: 'Ether',
+                    symbol: 'ETH',
+                    decimals: 18
+                  },
+                  rpcUrls: ['https://testnet-rpc.hii.network'],
+                  blockExplorerUrls: ['https://testnet-explorer.hii.network']
+                }]
+              });
+              setCurrentNetwork(NETWORKS[0]); // HII Testnet
+            }
+          }
+        } else {
+          setCurrentNetwork(NETWORKS[0]); // HII Testnet
+        }
+      } catch (error) {
+        console.error('Error switching network:', error);
+      }
+    }
+  };
+
   return (
     <NetworkContext.Provider
-      value={{ currentNetwork, setCurrentNetwork, walletAddress, setWalletAddress }}
+      value={{ 
+        currentNetwork, 
+        setCurrentNetwork, 
+        walletAddress, 
+        setWalletAddress: handleSetWalletAddress 
+      }}
     >
       {children}
     </NetworkContext.Provider>
