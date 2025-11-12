@@ -1,5 +1,5 @@
 import { Address } from "viem";
-import { Token, Percent, Ether } from "@uniswap/sdk-core";
+import { Token, Percent, Ether, CurrencyAmount } from "@uniswap/sdk-core";
 import { nearestUsableTick, TickMath } from "@uniswap/v3-sdk";
 import { Position, MintOptions, V4PositionManager, PermitDetails } from "@uniswap/v4-sdk";
 import {
@@ -8,11 +8,231 @@ import {
   PERMIT2_ABI,
   PERMIT2_TYPES,
   ERC20_ABI,
+  STATE_VIEW_ABI,
 } from "@/config/uniswapV4";
 import { getPool } from "./poolService";
-import { ZERO_ADDRESS, isNativeETH } from "./helpers";
+import { ZERO_ADDRESS, isNativeETH, fetchTokenInfo, decodePositionInfo } from "./helpers";
+import { Pool } from "@uniswap/v4-sdk";
 
 const AMOUNT_MAX = 2n ** 256n - 1n;
+
+export function calculateLiquidityToRemove(
+  currentLiquidity: bigint,
+  percentageToRemove: number // 0.25 = 25%, 1.0 = 100%
+): {
+  liquidityToRemove: bigint;
+  liquidityPercentage: Percent;
+} {
+  const scaled = Math.floor(percentageToRemove * 10000);
+  const liquidityToRemove = (currentLiquidity * BigInt(scaled)) / 10000n;
+  const liquidityPercentage = new Percent(Math.floor(percentageToRemove * 100), 100);
+  return { liquidityToRemove, liquidityPercentage };
+}
+
+export async function removeLiquidityFromPosition(
+  client: any,
+  walletClient: any,
+  chainId: number,
+  account: Address,
+  tokenId: bigint,
+  percentageToRemove: number, // 0.25 = 25%, 1.0 = 100%
+  slippageTolerance: number = 0.05,
+  burnTokenIfEmpty: boolean = false
+) {
+  try {
+    console.groupCollapsed("🔎 V4Position/removeLiquidityFromPosition");
+    console.debug("inputs:", {
+      chainId,
+      account,
+      tokenId: tokenId.toString(),
+      percentageToRemove,
+      slippageTolerance,
+      burnTokenIfEmpty,
+    });
+    const addresses = getUniswapV4Addresses(chainId);
+    if (!addresses) throw new Error(`V4 not supported on chain ${chainId}`);
+    console.debug("🔗 Using connected chainId", chainId, {
+      positionManager: addresses.positionManager,
+      stateView: addresses.stateView,
+      permit2: addresses.permit2,
+    });
+
+    // Load full position details from chain
+    const details = await getPositionDetails(client, chainId, tokenId);
+    if (!details) throw new Error("Position details not found");
+
+    // Build tokens (fetch metadata concurrently)
+    const [token0Info, token1Info] = await Promise.all([
+      fetchTokenInfo(client, details.token0.address),
+      fetchTokenInfo(client, details.token1.address),
+    ]);
+    const token0 = new Token(chainId, details.token0.address, token0Info.decimals, token0Info.symbol, token0Info.name);
+    const token1 = new Token(chainId, details.token1.address, token1Info.decimals, token1Info.symbol, token1Info.name);
+
+    // Get pool (current state)
+    const poolData = await getPool(
+      client,
+      chainId,
+      details.poolKey.fee,
+      details.poolKey.tickSpacing,
+      details.poolKey.hooks as Address,
+      token0,
+      token1
+    );
+    if (!poolData || !poolData.pool) throw new Error("Pool not found for position");
+    const { pool } = poolData;
+
+    console.debug("position details:", {
+      tokenId: tokenId.toString(),
+      liquidity: details.liquidity.toString(),
+      tickLower: details.tickLower,
+      tickUpper: details.tickUpper,
+      tickSpacingFromPoolKey: details.poolKey.tickSpacing,
+      tickSpacingFromPool: pool.tickSpacing,
+      fee: details.poolKey.fee,
+      hooks: details.poolKey.hooks,
+      currency0: details.poolKey.currency0,
+      currency1: details.poolKey.currency1,
+    });
+    if (details.poolKey.tickSpacing !== pool.tickSpacing) {
+      console.warn("⚠️ tickSpacing mismatch between position.poolKey and live pool", {
+        fromPoolKey: details.poolKey.tickSpacing,
+        fromPool: pool.tickSpacing,
+      });
+    }
+
+    // Validate ticks against spacing and global bounds without invoking nearestUsableTick on raw values
+    const spacing = pool.tickSpacing;
+    if (!Number.isFinite(spacing) || spacing <= 0) {
+      console.error("❌ Invalid tickSpacing from pool", { spacing });
+      throw new Error("INVALID_TICK_SPACING");
+    }
+
+    const minUsable = Math.ceil(TickMath.MIN_TICK / spacing) * spacing;
+    const maxUsable = Math.floor(TickMath.MAX_TICK / spacing) * spacing;
+    const isAligned = (t: number) => ((t % spacing) + spacing) % spacing === 0;
+
+    console.debug("tick validation", {
+      raw: { lower: details.tickLower, upper: details.tickUpper },
+      spacing,
+      bounds: { minUsable, maxUsable, global: { min: TickMath.MIN_TICK, max: TickMath.MAX_TICK } },
+      alignment: { lowerAligned: isAligned(details.tickLower), upperAligned: isAligned(details.tickUpper) },
+    });
+    if (details.tickLower >= details.tickUpper) {
+      console.error("❌ Decoded ticks invalid order (lower >= upper)", {
+        tickLower: details.tickLower,
+        tickUpper: details.tickUpper,
+      });
+      throw new Error("DECODE_INVALID_TICK_ORDER");
+    }
+    if (!isAligned(details.tickLower) || !isAligned(details.tickUpper)) {
+      console.error("❌ Decoded ticks not aligned to spacing — refusing to mutate", {
+        tickLower: details.tickLower,
+        tickUpper: details.tickUpper,
+        spacing,
+      });
+      throw new Error("DECODE_MISALIGNED_TICKS");
+    }
+    if (details.tickLower < TickMath.MIN_TICK || details.tickUpper > TickMath.MAX_TICK) {
+      console.error("❌ Decoded ticks outside global bounds", {
+        tickLower: details.tickLower,
+        tickUpper: details.tickUpper,
+        minGlobal: TickMath.MIN_TICK,
+        maxGlobal: TickMath.MAX_TICK,
+      });
+      throw new Error("DECODE_TICKS_OUT_OF_BOUNDS");
+    }
+
+    // Calculate percent to remove
+    const { liquidityToRemove, liquidityPercentage } = calculateLiquidityToRemove(details.liquidity, percentageToRemove);
+
+    console.debug("computed removal:", {
+      liquidityToRemove: liquidityToRemove.toString(),
+      liquidityPercentage: `${liquidityPercentage.numerator}/${liquidityPercentage.denominator}`,
+    });
+
+    // Recreate Position with current liquidity to compute remove calldata
+    let position: Position;
+    try {
+      position = new Position({
+        pool: pool as Pool,
+        tickLower: details.tickLower,
+        tickUpper: details.tickUpper,
+        liquidity: details.liquidity.toString(),
+      });
+    } catch (err) {
+      console.error("❌ Failed to construct SDK Position:", {
+        err,
+        tickLower: details.tickLower,
+        tickUpper: details.tickUpper,
+        spacing,
+      });
+      throw err;
+    }
+
+    // Interpret slippageTolerance as fraction (e.g., 0.005 for 0.5%)
+    const slipNumerator = Math.max(0, Math.round(slippageTolerance * 10_000));
+    const slippagePct = new Percent(slipNumerator, 10_000);
+    const block = await client.getBlock();
+    const deadline = Number(block.timestamp) + 20 * 60;
+
+    const removeOptions = {
+      slippageTolerance: slippagePct,
+      deadline: deadline.toString(),
+      hookData: "0x",
+      tokenId: tokenId.toString(),
+      liquidityPercentage,
+      burnToken: burnTokenIfEmpty && percentageToRemove === 1.0,
+    };
+
+    console.debug("remove options:", {
+      slippagePct: `${slippagePct.numerator}/${slippagePct.denominator}`,
+      deadline,
+      burnToken: removeOptions.burnToken,
+    });
+
+    let calldata, value;
+    try {
+      ({ calldata, value } = V4PositionManager.removeCallParameters(position, removeOptions));
+    } catch (err: any) {
+      console.error("❌ removeCallParameters failed", {
+        message: err?.message,
+        cause: err?.cause,
+        ticks: { lower: details.tickLower, upper: details.tickUpper },
+        spacing,
+        bounds: { minUsable, maxUsable },
+      });
+      throw err;
+    }
+    console.debug("🧩 calldata", calldata);
+    console.debug("💰 value", value);
+    console.debug("📦 remove options", removeOptions);
+
+    const txHash = await walletClient.writeContract({
+      account,
+      address: addresses.positionManager as Address,
+      abi: POSITION_MANAGER_ABI,
+      functionName: "multicall",
+      args: [[calldata as `0x${string}`]],
+      value: BigInt(value.toString()),
+    });
+
+    const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+    console.debug("✅ Remove success:", txHash);
+    console.groupEnd();
+    return {
+      txHash,
+      receipt,
+      removedLiquidity: liquidityToRemove,
+      percentageRemoved: percentageToRemove,
+      tokenBurned: burnTokenIfEmpty && percentageToRemove === 1.0,
+    };
+  } catch (error) {
+    console.error("❌ Error in removeLiquidityFromPosition:", error);
+    console.groupEnd();
+    throw error;
+  }
+}
 
 export async function mintPosition(
   client: any,
@@ -33,6 +253,11 @@ export async function mintPosition(
     if (!addresses) {
       throw new Error(`V4 not supported on chain ${chainId}`);
     }
+    console.debug("getPositionDetails: using addresses", {
+      chainId,
+      positionManager: addresses.positionManager,
+      stateView: addresses.stateView,
+    });
 
     // Get pool
     const poolData = await getPool(client, chainId, fee, tickSpacing, hookAddress, token0, token1);
@@ -284,4 +509,223 @@ export async function getUserPositions(
     console.error("❌ Error in getUserPositions:", error);
     return [];
   }
+}
+
+export interface V4PositionDetails {
+  tokenId: bigint;
+  poolKey: {
+    currency0: Address;
+    currency1: Address;
+    fee: number;
+    tickSpacing: number;
+    hooks: Address;
+  };
+  liquidity: bigint;
+  tickLower: number;
+  tickUpper: number;
+  currentTick: number;
+  token0: { address: Address; symbol: string };
+  token1: { address: Address; symbol: string };
+}
+
+export async function getPositionDetails(
+  client: any,
+  chainId: number,
+  tokenId: bigint
+): Promise<V4PositionDetails | null> {
+  try {
+    const addresses = getUniswapV4Addresses(chainId);
+    if (!addresses) {
+      throw new Error(`V4 not supported on chain ${chainId}`);
+    }
+
+    const [poolKey, infoValue] = (await client.readContract({
+      address: addresses.positionManager as Address,
+      abi: POSITION_MANAGER_ABI,
+      functionName: "getPoolAndPositionInfo",
+      args: [tokenId],
+    })) as [
+      { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address },
+      bigint
+    ];
+
+    // Decode packed ticks from PositionInfo (no liquidity in info)
+    const { tickLower, tickUpper } = decodePositionInfo(infoValue);
+
+    // Read liquidity and fetch token metadata concurrently
+    const [liquidity, token0Info, token1Info] = await Promise.all([
+      client.readContract({
+        address: addresses.positionManager as Address,
+        abi: POSITION_MANAGER_ABI,
+        functionName: "getPositionLiquidity",
+        args: [tokenId],
+      }) as Promise<bigint>,
+      fetchTokenInfo(client, poolKey.currency0),
+      fetchTokenInfo(client, poolKey.currency1),
+    ]);
+
+    const token0 = new Token(chainId, poolKey.currency0, token0Info.decimals, token0Info.symbol, token0Info.name);
+    const token1 = new Token(chainId, poolKey.currency1, token1Info.decimals, token1Info.symbol, token1Info.name);
+
+    // Compute poolId via SDK and get current tick (optional, do not fail hard)
+    let currentTick = 0;
+    let protocolFee = 0;
+    let lpFee = 0;
+    try {
+      const poolId = Pool.getPoolId(token0, token1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks);
+      const slot0 = (await client.readContract({
+        address: addresses.stateView as Address,
+        abi: STATE_VIEW_ABI,
+        functionName: "getSlot0",
+        args: [poolId as `0x${string}`],
+      })) as [bigint, number, number, number];
+      currentTick = Number(slot0[1]);
+      protocolFee = Number(slot0[2]);
+      lpFee = Number(slot0[3]);
+    } catch (e: any) {
+      console.warn("getPositionDetails: getSlot0 failed, continuing without currentTick", {
+        message: e?.message,
+      });
+    }
+
+    const result = {
+      tokenId,
+      poolKey,
+      liquidity,
+      tickLower,
+      tickUpper,
+      currentTick,
+      token0: { address: poolKey.currency0, symbol: token0Info.symbol },
+      token1: { address: poolKey.currency1, symbol: token1Info.symbol },
+    };
+
+    console.debug("getPositionDetails: result", {
+      tokenId: tokenId.toString(),
+      token0: result.token0.symbol,
+      token1: result.token1.symbol,
+      fee: result.poolKey.fee,
+      tickBounds: [result.tickLower, result.tickUpper],
+      currentTick: result.currentTick,
+      protocolFee,
+      lpFee,
+    });
+
+    return result;
+  } catch (error) {
+    console.error("❌ Error in getPositionDetails:", error);
+    return null;
+  }
+}
+
+/**
+ * Estimate token amounts received when removing a percentage of liquidity
+ */
+export async function estimateRemoveAmounts(
+  client: any,
+  chainId: number,
+  tokenId: bigint,
+  percentageToRemove: number, // 0.25 = 25%, 1.0 = 100%
+  slippageTolerance: number = 0.005 // 0.5%
+): Promise<{
+  token0: { symbol: string; address: Address; estimate: string; minimum: string };
+  token1: { symbol: string; address: Address; estimate: string; minimum: string };
+  inRange: boolean;
+  oneSided: boolean;
+  percentageRemoved: number;
+} | null> {
+  try {
+    const details = await getPositionDetails(client, chainId, tokenId);
+    if (!details) return null;
+
+    const addresses = getUniswapV4Addresses(chainId);
+    if (!addresses) throw new Error(`V4 not supported on chain ${chainId}`);
+
+    // Build token objects with decimals (concurrent fetch)
+    const [token0Info, token1Info] = await Promise.all([
+      fetchTokenInfo(client, details.token0.address),
+      fetchTokenInfo(client, details.token1.address),
+    ]);
+    const token0 = new Token(chainId, details.token0.address, token0Info.decimals, token0Info.symbol, token0Info.name);
+    const token1 = new Token(chainId, details.token1.address, token1Info.decimals, token1Info.symbol, token1Info.name);
+
+    // Get live pool for current tick/price
+    const { pool } = await getPool(
+      client,
+      chainId,
+      details.poolKey.fee,
+      details.poolKey.tickSpacing,
+      details.poolKey.hooks as Address,
+      token0,
+      token1
+    );
+    if (!pool) throw new Error("Pool not found for position");
+
+    // Compute partial liquidity to burn (use BPS to avoid float rounding)
+    const percentBps = Math.max(0, Math.min(10000, Math.round(percentageToRemove * 10000)));
+    const liquidityPartial = (details.liquidity * BigInt(percentBps)) / 10000n;
+
+    // Construct a Position for the partial liquidity
+    const partialPosition = new Position({
+      pool: pool as Pool,
+      tickLower: details.tickLower,
+      tickUpper: details.tickUpper,
+      liquidity: liquidityPartial.toString(),
+    });
+
+    // Estimated amounts at current price (human-friendly via CurrencyAmount)
+    const est0 = partialPosition.amount0;
+    const est1 = partialPosition.amount1;
+
+    // Minimum amounts using SDK's burnAmountsWithSlippage for accuracy
+    const slipBps = Math.max(0, Math.round(slippageTolerance * 10000));
+    const burnMin = partialPosition.burnAmountsWithSlippage(new Percent(slipBps, 10000));
+    // Convert JSBI to string to avoid cross-package JSBI type mismatch
+    const min0 = CurrencyAmount.fromRawAmount(token0, burnMin.amount0.toString());
+    const min1 = CurrencyAmount.fromRawAmount(token1, burnMin.amount1.toString());
+
+    const inRange = details.currentTick >= details.tickLower && details.currentTick <= details.tickUpper;
+    const oneSided = burnMin.amount0.toString() === "0" || burnMin.amount1.toString() === "0";
+
+    return {
+      token0: {
+        symbol: token0.symbol ?? details.token0.symbol,
+        address: details.token0.address,
+        estimate: est0.toSignificant(6),
+        minimum: min0.toSignificant(6),
+      },
+      token1: {
+        symbol: token1.symbol ?? details.token1.symbol,
+        address: details.token1.address,
+        estimate: est1.toSignificant(6),
+        minimum: min1.toSignificant(6),
+      },
+      inRange,
+      oneSided,
+      percentageRemoved: percentageToRemove,
+    };
+  } catch (error) {
+    console.warn("estimateRemoveAmounts: failed to estimate", error);
+    return null;
+  }
+}
+
+/**
+ * Estimate full-position token amounts equivalent at current price.
+ * Convenience wrapper for percentageToRemove = 1.0
+ */
+export async function estimatePositionAmounts(
+  client: any,
+  chainId: number,
+  tokenId: bigint,
+  slippageTolerance: number = 0.005 // 0.5%
+): Promise<{
+  token0: { symbol: string; address: Address; estimate: string; minimum: string };
+  token1: { symbol: string; address: Address; estimate: string; minimum: string };
+  inRange: boolean;
+  oneSided: boolean;
+} | null> {
+  const res = await estimateRemoveAmounts(client, chainId, tokenId, 1.0, slippageTolerance);
+  if (!res) return null;
+  const { token0, token1, inRange, oneSided } = res;
+  return { token0, token1, inRange, oneSided };
 }

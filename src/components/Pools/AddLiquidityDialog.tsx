@@ -16,13 +16,16 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useV4Provider } from "@/hooks/useV4Provider";
 import { toast } from "@/hooks/use-toast";
-import { Token } from "@uniswap/sdk-core";
+import { Token, Percent } from "@uniswap/sdk-core";
+import { Position } from "@uniswap/v4-sdk";
+import { nearestUsableTick } from "@uniswap/v3-sdk";
 import { initializePool, getPool } from "@/services/uniswap/v4/poolService";
 import { mintPosition } from "@/services/uniswap/v4/positionService";
 import { fetchTokenInfo } from "@/services/uniswap/v4/helpers";
 import { isV4SupportedNetwork } from "@/config/uniswapV4";
 import { AlertCircle, ChevronsUpDown } from "lucide-react";
 import { useSubgraphPools } from "@/hooks/useSubgraphPools";
+import { TxStatusDialog } from "@/components/ui/TxStatusDialog";
 
 interface AddLiquidityDialogProps {
   open: boolean;
@@ -53,6 +56,7 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
   const [token1Address, setToken1Address] = useState("");
   const [amount0, setAmount0] = useState("");
   const [amount1, setAmount1] = useState("");
+  const [lastEdited, setLastEdited] = useState<"amount0" | "amount1" | null>(null);
   const [fee, setFee] = useState("3000");
   const [isLoading, setIsLoading] = useState(false);
   const [poolExists, setPoolExists] = useState<boolean | null>(null);
@@ -61,6 +65,11 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
   const [token1Meta, setToken1Meta] = useState<{ symbol: string; name: string; decimals: number } | null>(null);
   const [openPicker0, setOpenPicker0] = useState(false);
   const [openPicker1, setOpenPicker1] = useState(false);
+  const [txOpen, setTxOpen] = useState(false);
+  const [txStatus, setTxStatus] = useState<"loading" | "success" | "error">("loading");
+  const [txTitle, setTxTitle] = useState<string | undefined>(undefined);
+  const [txDesc, setTxDesc] = useState<string | undefined>(undefined);
+  const [txHash, setTxHash] = useState<string | undefined>(undefined);
 
   const isSupported = isV4SupportedNetwork(currentNetwork.chainId);
   const tickSpacing = TICK_SPACINGS[fee];
@@ -149,6 +158,184 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
     loadMeta();
   }, [publicClient, token1Address]);
 
+  // Auto-estimate amount1 when user edits amount0
+  useEffect(() => {
+    const estimateCounterForAmount0 = async () => {
+      try {
+        if (!publicClient || !token0Meta || !token1Meta) return;
+        if (!token0Address || !token1Address) return;
+        if (lastEdited !== "amount0") return;
+        if (!amount0 || amount0.trim() === "") return;
+        if (!token0Address.startsWith("0x") || token0Address.length !== 42) return;
+        if (!token1Address.startsWith("0x") || token1Address.length !== 42) return;
+
+        // parse amount0 to raw
+        const amt0Num = parseFloat(amount0);
+        if (!isFinite(amt0Num) || amt0Num <= 0) return;
+        const amount0Raw = BigInt(Math.floor(amt0Num * 10 ** token0Meta.decimals)).toString();
+
+        // build Token objects
+        const token0 = new Token(
+          currentNetwork.chainId,
+          token0Address,
+          token0Meta.decimals,
+          token0Meta.symbol,
+          token0Meta.name
+        );
+        const token1 = new Token(
+          currentNetwork.chainId,
+          token1Address,
+          token1Meta.decimals,
+          token1Meta.symbol,
+          token1Meta.name
+        );
+
+        // get pool
+        const poolData = await getPool(
+          publicClient,
+          currentNetwork.chainId,
+          parseInt(fee),
+          parseInt(tickSpacing),
+          "0x0000000000000000000000000000000000000000",
+          token0,
+          token1
+        );
+        if (!poolData || !poolData.pool) return;
+
+        const { pool } = poolData;
+        // derive a symmetric tick range around current price
+        const currentTick = pool.tickCurrent;
+        const spacing = pool.tickSpacing;
+        const tickRangeAmount = spacing * 10;
+        const tickLower = nearestUsableTick(currentTick - tickRangeAmount, spacing);
+        const tickUpper = nearestUsableTick(currentTick + tickRangeAmount, spacing);
+
+        // map UI token0 to pool token order
+        const token0IsA = token0.address.toLowerCase() < token1.address.toLowerCase();
+        let position: Position;
+        if (token0IsA) {
+          // UI token0 corresponds to pool.token0
+          position = Position.fromAmount0({
+            pool,
+            tickLower,
+            tickUpper,
+            amount0: amount0Raw,
+            useFullPrecision: false,
+          });
+        } else {
+          // UI token0 corresponds to pool.token1
+          position = Position.fromAmount1({
+            pool,
+            tickLower,
+            tickUpper,
+            amount1: amount0Raw,
+          });
+        }
+
+        // get exact mint amounts (no slippage) and take the opposite side
+        const { amount0: need0, amount1: need1 } = position.mintAmountsWithSlippage(new Percent(0, 10_000));
+        // needX are JSBI; convert to decimal string
+        const otherRawStr = token0IsA ? need1.toString() : need0.toString();
+        const otherDecimals = token0IsA ? token1Meta.decimals : token0Meta.decimals;
+        const otherNum = Number(otherRawStr) / 10 ** otherDecimals;
+        // limit to 6 decimals to avoid noisy UI
+        const otherDisplay = otherNum.toLocaleString(undefined, { maximumFractionDigits: 6, useGrouping: false });
+        setAmount1(otherDisplay);
+      } catch (e) {
+        // silent fail for UX; do not toast here
+      }
+    };
+    estimateCounterForAmount0();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amount0, token0Address, token1Address, token0Meta, token1Meta, fee, tickSpacing, publicClient, currentNetwork.chainId, lastEdited]);
+
+  // Auto-estimate amount0 when user edits amount1
+  useEffect(() => {
+    const estimateCounterForAmount1 = async () => {
+      try {
+        if (!publicClient || !token0Meta || !token1Meta) return;
+        if (!token0Address || !token1Address) return;
+        if (lastEdited !== "amount1") return;
+        if (!amount1 || amount1.trim() === "") return;
+        if (!token0Address.startsWith("0x") || token0Address.length !== 42) return;
+        if (!token1Address.startsWith("0x") || token1Address.length !== 42) return;
+
+        // parse amount1 to raw
+        const amt1Num = parseFloat(amount1);
+        if (!isFinite(amt1Num) || amt1Num <= 0) return;
+        const amount1Raw = BigInt(Math.floor(amt1Num * 10 ** token1Meta.decimals)).toString();
+
+        // build Token objects
+        const token0 = new Token(
+          currentNetwork.chainId,
+          token0Address,
+          token0Meta.decimals,
+          token0Meta.symbol,
+          token0Meta.name
+        );
+        const token1 = new Token(
+          currentNetwork.chainId,
+          token1Address,
+          token1Meta.decimals,
+          token1Meta.symbol,
+          token1Meta.name
+        );
+
+        // get pool
+        const poolData = await getPool(
+          publicClient,
+          currentNetwork.chainId,
+          parseInt(fee),
+          parseInt(tickSpacing),
+          "0x0000000000000000000000000000000000000000",
+          token0,
+          token1
+        );
+        if (!poolData || !poolData.pool) return;
+
+        const { pool } = poolData;
+        const currentTick = pool.tickCurrent;
+        const spacing = pool.tickSpacing;
+        const tickRangeAmount = spacing * 10;
+        const tickLower = nearestUsableTick(currentTick - tickRangeAmount, spacing);
+        const tickUpper = nearestUsableTick(currentTick + tickRangeAmount, spacing);
+
+        // map UI token1 to pool token order
+        const token0IsA = token0.address.toLowerCase() < token1.address.toLowerCase();
+        let position: Position;
+        if (token0IsA) {
+          // UI token1 corresponds to pool.token1
+          position = Position.fromAmount1({
+            pool,
+            tickLower,
+            tickUpper,
+            amount1: amount1Raw,
+          });
+        } else {
+          // UI token1 corresponds to pool.token0
+          position = Position.fromAmount0({
+            pool,
+            tickLower,
+            tickUpper,
+            amount0: amount1Raw,
+            useFullPrecision: false,
+          });
+        }
+
+        const { amount0: need0, amount1: need1 } = position.mintAmountsWithSlippage(new Percent(0, 10_000));
+        const otherRawStr = token0IsA ? need0.toString() : need1.toString();
+        const otherDecimals = token0IsA ? token0Meta.decimals : token1Meta.decimals;
+        const otherNum = Number(otherRawStr) / 10 ** otherDecimals;
+        const otherDisplay = otherNum.toLocaleString(undefined, { maximumFractionDigits: 6, useGrouping: false });
+        setAmount0(otherDisplay);
+      } catch (e) {
+        // silent fail
+      }
+    };
+    estimateCounterForAmount1();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amount1, token0Address, token1Address, token0Meta, token1Meta, fee, tickSpacing, publicClient, currentNetwork.chainId, lastEdited]);
+
   // Check if pool exists when addresses and fee change
   useEffect(() => {
     const checkPool = async () => {
@@ -159,8 +346,10 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
 
       try {
         setCheckingPool(true);
-        const token0Info = await fetchTokenInfo(publicClient, token0Address as `0x${string}`);
-        const token1Info = await fetchTokenInfo(publicClient, token1Address as `0x${string}`);
+        const [token0Info, token1Info] = await Promise.all([
+          fetchTokenInfo(publicClient, token0Address as `0x${string}`),
+          fetchTokenInfo(publicClient, token1Address as `0x${string}`),
+        ]);
 
         const token0 = new Token(
           currentNetwork.chainId,
@@ -228,11 +417,18 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
     }
 
     setIsLoading(true);
+    setTxOpen(true);
+    setTxStatus("loading");
+    setTxTitle(undefined);
+    setTxDesc(undefined);
+    setTxHash(undefined);
 
     try {
       // Fetch token info
-      const token0Info = await fetchTokenInfo(publicClient, token0Address as `0x${string}`);
-      const token1Info = await fetchTokenInfo(publicClient, token1Address as `0x${string}`);
+      const [token0Info, token1Info] = await Promise.all([
+        fetchTokenInfo(publicClient, token0Address as `0x${string}`),
+        fetchTokenInfo(publicClient, token1Address as `0x${string}`),
+      ]);
 
       const token0 = new Token(
         currentNetwork.chainId,
@@ -256,6 +452,9 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
 
       // If pool doesn't exist, initialize it first
       if (!poolExists) {
+        setTxStatus("loading");
+        setTxTitle("Initializing pool");
+        setTxDesc("Creating a new pool before adding liquidity.");
         toast({
           title: "Creating New Pool",
           description: "Initializing pool first...",
@@ -273,6 +472,9 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
           "0x0000000000000000000000000000000000000000"
         );
 
+        setTxStatus("success");
+        setTxTitle("Pool initialized");
+        setTxDesc(`Pool for ${token0Info.symbol}/${token1Info.symbol} created.`);
         toast({
           title: "Pool Created!",
           description: `Pool for ${token0Info.symbol}/${token1Info.symbol} initialized`,
@@ -284,7 +486,10 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
       const amount1Wei = BigInt(Math.floor(parseFloat(amount1) * 10 ** token1.decimals));
 
       // Mint position
-      await mintPosition(
+      setTxStatus("loading");
+      setTxTitle("Adding liquidity");
+      setTxDesc("Submitting liquidity transaction and waiting for confirmation...");
+      const mintRes = await mintPosition(
         publicClient,
         walletClient,
         currentNetwork.chainId,
@@ -299,6 +504,10 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
         true
       );
 
+      setTxStatus("success");
+      setTxTitle("Liquidity added");
+      setTxDesc(`Successfully added liquidity to ${token0Info.symbol}/${token1Info.symbol}.`);
+      setTxHash(mintRes?.txHash);
       toast({
         title: "Liquidity Added!",
         description: `Successfully added liquidity to ${token0Info.symbol}/${token1Info.symbol}`,
@@ -315,6 +524,9 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
       setPoolExists(null);
     } catch (error) {
       console.error("Error adding liquidity:", error);
+      setTxStatus("error");
+      setTxTitle("Add liquidity failed");
+      setTxDesc(error instanceof Error ? error.message : "Failed to add liquidity");
       toast({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to add liquidity",
@@ -341,6 +553,7 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
@@ -392,9 +605,9 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
                 </PopoverTrigger>
                 <PopoverContent align="end" className="p-0 w-80">
                   <Command>
-                    <CommandInput placeholder="Tìm token trong pools..." />
+                    <CommandInput placeholder="Search tokens in pools..." />
                     <CommandList>
-                      <CommandEmpty>Không có token phù hợp</CommandEmpty>
+                      <CommandEmpty>No matching tokens</CommandEmpty>
                       <CommandGroup heading="Tokens">
                         {poolTokens.map((t) => (
                           <CommandItem
@@ -426,8 +639,11 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
               id="amount0"
               type="number"
               placeholder="1.0"
-              value={amount0}
-              onChange={(e) => setAmount0(e.target.value)}
+            value={amount0}
+              onChange={(e) => {
+                setLastEdited("amount0");
+                setAmount0(e.target.value);
+              }}
             />
           </div>
 
@@ -454,9 +670,9 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
                 </PopoverTrigger>
                 <PopoverContent align="end" className="p-0 w-80">
                   <Command>
-                    <CommandInput placeholder="Tìm token trong pools..." />
+                    <CommandInput placeholder="Search tokens in pools..." />
                     <CommandList>
-                      <CommandEmpty>Không có token phù hợp</CommandEmpty>
+                      <CommandEmpty>No matching tokens</CommandEmpty>
                       <CommandGroup heading="Tokens">
                         {(token1Options.length ? token1Options : poolTokens).map((t) => (
                           <CommandItem
@@ -488,8 +704,11 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
               id="amount1"
               type="number"
               placeholder="1000.0"
-              value={amount1}
-              onChange={(e) => setAmount1(e.target.value)}
+            value={amount1}
+              onChange={(e) => {
+                setLastEdited("amount1");
+                setAmount1(e.target.value);
+              }}
             />
           </div>
 
@@ -514,7 +733,7 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleAddLiquidity} disabled={isLoading || checkingPool}>
+          <Button onClick={handleAddLiquidity} disabled={!walletAddress || isLoading || checkingPool}>
             {isLoading 
               ? "Processing..." 
               : poolExists === false 
@@ -524,5 +743,15 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
         </div>
       </DialogContent>
     </Dialog>
+    <TxStatusDialog
+      open={txOpen}
+      onOpenChange={setTxOpen}
+      status={txStatus}
+      title={txTitle}
+      description={txDesc}
+      chainId={currentNetwork.chainId}
+      txHash={txHash}
+    />
+    </>
   );
 }

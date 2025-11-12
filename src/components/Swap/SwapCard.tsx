@@ -8,11 +8,15 @@ import { useSubgraphPools } from "@/hooks/useSubgraphPools";
 import { SlippageSettings } from "./SlippageSettings";
 import { SwapConfirmDialog } from "./SwapConfirmDialog";
 import { toast } from "sonner";
+import { TxStatusDialog } from "@/components/ui/TxStatusDialog";
 import { useQuery } from "@tanstack/react-query";
 import { saveTransaction } from "@/types/transaction";
 import { useV4Provider } from "@/hooks/useV4Provider";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { estimateExactInput, estimateExactOutput, quoteExactInputSingle, quoteExactOutputSingle } from "@/services/uniswap/v4/quoteService";
+import { swapExactInSingle } from "@/services/uniswap/v4/swapService";
+import { getTokenBalance, getNativeBalance } from "@/utils/erc20";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface TokenPrice {
   usd: number;
@@ -29,13 +33,25 @@ const fetchTokenPrices = async (tokenIds: string[]): Promise<Record<string, Toke
 
 interface SwapCardProps {
   onTokensChange?: (fromToken: Token | null, toToken: Token | null) => void;
+  initialFromAddress?: string;
+  initialToAddress?: string;
+  selectedFromToken?: Token | null;
+  selectedToToken?: Token | null;
+  onSelectFromToken?: (token: Token) => void;
+  onSelectToToken?: (token: Token) => void;
 }
 
-export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
-  const [fromToken, setFromToken] = useState<Token | null>(null);
-  const [toToken, setToToken] = useState<Token | null>(null);
-  const { publicClient } = useV4Provider();
-  const { currentNetwork } = useNetwork();
+export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress, selectedFromToken, selectedToToken, onSelectFromToken, onSelectToToken }: SwapCardProps) => {
+  // Internal state (used only if controlled props are not provided)
+  const [fromTokenState, setFromTokenState] = useState<Token | null>(null);
+  const [toTokenState, setToTokenState] = useState<Token | null>(null);
+  // Derived tokens based on controlled vs uncontrolled mode
+  const fromToken = selectedFromToken ?? fromTokenState;
+  const toToken = selectedToToken ?? toTokenState;
+  const setFromToken = onSelectFromToken ?? setFromTokenState;
+  const setToToken = onSelectToToken ?? setToTokenState;
+  const { publicClient, walletClient } = useV4Provider();
+  const { currentNetwork, walletAddress } = useNetwork();
 
   useEffect(() => {
     onTokensChange?.(fromToken, toToken);
@@ -48,6 +64,13 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
   const [countdown, setCountdown] = useState(15);
   const [slippage, setSlippage] = useState(0.5);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [txDialogOpen, setTxDialogOpen] = useState(false);
+  const [txStatus, setTxStatus] = useState<"loading" | "success" | "error">("loading");
+  const [txHash, setTxHash] = useState<string | undefined>(undefined);
+  const [fromBalance, setFromBalance] = useState<string | null>(null);
+  const [toBalance, setToBalance] = useState<string | null>(null);
+  const [loadingBalances, setLoadingBalances] = useState(false);
+  const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
 
   // Load pools to build token universe and adjacency mapping
   const { pools } = useSubgraphPools();
@@ -87,7 +110,9 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
     for (const p of pools) {
       const a = p.token0?.id?.toLowerCase();
       const b = p.token1?.id?.toLowerCase();
-      if (!a || !b) continue;
+      const liq = parseFloat(p.liquidity || "0");
+      // Chỉ thêm cặp vào adjacency nếu có thanh khoản > 0
+      if (!a || !b || !(Number.isFinite(liq) && liq > 0)) continue;
       if (!adj[a]) adj[a] = new Set<string>();
       if (!adj[b]) adj[b] = new Set<string>();
       adj[a].add(b);
@@ -97,6 +122,40 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
   })();
 
   const allowedToAddresses = fromToken ? Array.from(adjacency[fromToken.address?.toLowerCase()] || []) : [];
+
+  // Candidate pools for current token pair (order-insensitive)
+  const poolCandidates = pools
+    .filter((p) => {
+      const a = p.token0?.id?.toLowerCase();
+      const b = p.token1?.id?.toLowerCase();
+      const fromAddr = fromToken?.address?.toLowerCase();
+      const toAddr = toToken?.address?.toLowerCase();
+      if (!a || !b || !fromAddr || !toAddr) return false;
+      return (a === fromAddr && b === toAddr) || (a === toAddr && b === fromAddr);
+    })
+    .map((p) => ({
+      id: p.id,
+      fee: p.feeTier ? parseInt(p.feeTier) : undefined,
+      tickSpacing: parseInt(p.tickSpacing),
+      hooks: (p.hooks as any) as `0x${string}` | undefined,
+      liquidity: parseFloat(p.liquidity || "0"),
+    }))
+    .sort((a, b) => (b.liquidity - a.liquidity));
+
+  // Chỉ giữ những pool có thanh khoản > 0 để cho phép chọn fee tier
+  const liquidPools = poolCandidates.filter((c) => Number.isFinite(c.liquidity) && c.liquidity > 0);
+
+  // Default select the highest-liquidity pool when tokens change
+  useEffect(() => {
+    if (liquidPools.length > 0) {
+      setSelectedPoolId((prev) => {
+        const exists = liquidPools.find((c) => c.id === prev);
+        return exists ? prev : liquidPools[0].id;
+      });
+    } else {
+      setSelectedPoolId(null);
+    }
+  }, [fromToken?.address, toToken?.address, pools.length]);
 
   // Fetch prices for selected tokens
   const { data: prices, isLoading: pricesLoading } = useQuery({
@@ -109,6 +168,23 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
     enabled: !!(fromToken && toToken),
     refetchInterval: 15000, // Refetch every 15 seconds
   });
+
+  // Initialize tokens from provided addresses (if any)
+  useEffect(() => {
+    const addrToToken = (addr?: string | null): Token | null => {
+      if (!addr) return null;
+      const lower = addr.toLowerCase();
+      return allTokens.find((t) => t.address?.toLowerCase() === lower) || null;
+    };
+    const initFrom = addrToToken(initialFromAddress);
+    const initTo = addrToToken(initialToAddress);
+    if (!selectedFromToken && initFrom && (!fromToken || fromToken.address.toLowerCase() !== initFrom.address.toLowerCase())) {
+      setFromToken(initFrom);
+    }
+    if (!selectedToToken && initTo && (!toToken || toToken.address.toLowerCase() !== initTo.address.toLowerCase())) {
+      setToToken(initTo);
+    }
+  }, [initialFromAddress, initialToAddress, allTokens, selectedFromToken, selectedToToken]);
 
   // Countdown timer for price refresh
   useEffect(() => {
@@ -142,17 +218,23 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
       const toAddr = toToken.address as `0x${string}`;
 
       // Find tickSpacing from pools data (first matching pool), default 60
-      const matching = pools.find(
-        (p) => p.token0?.id?.toLowerCase() === fromAddr.toLowerCase() && p.token1?.id?.toLowerCase() === toAddr.toLowerCase()
-      ) || pools.find(
-        (p) => p.token0?.id?.toLowerCase() === toAddr.toLowerCase() && p.token1?.id?.toLowerCase() === fromAddr.toLowerCase()
-      );
-      const tickSpacing = matching ? parseInt(matching.tickSpacing) : 60;
+      const selected = selectedPoolId ? liquidPools.find((c) => c.id === selectedPoolId) : undefined;
+      const tickSpacing = selected?.tickSpacing ?? liquidPools[0]?.tickSpacing ?? undefined;
+      const feeTier = selected?.fee ?? liquidPools[0]?.fee ?? undefined;
+      const hooks = selected?.hooks ?? liquidPools[0]?.hooks ?? undefined;
+
+      console.groupCollapsed("🔎 SwapCard/runQuote");
+      console.debug("network:", currentNetwork?.name, currentNetwork?.chainId);
+      console.debug("from:", fromToken.symbol, fromAddr, "to:", toToken.symbol, toAddr);
+      console.debug("isFromInput:", isFromInput, "fromAmount:", fromAmount, "toAmount:", toAmount);
+      console.debug("poolCandidates:", poolCandidates.map(c => ({ id: c.id, fee: c.fee, tickSpacing: c.tickSpacing, liquidity: c.liquidity })));
+      console.debug("liquidPools:", liquidPools.map(c => ({ id: c.id, fee: c.fee, tickSpacing: c.tickSpacing, liquidity: c.liquidity })));
+      console.debug("selectedPoolId:", selectedPoolId, "tickSpacing:", tickSpacing, "fee:", feeTier, "hooks:", hooks);
 
       try {
         setQuoting(true);
         if (isFromInput && fromAmount) {
-          // Prefer Quoter if available
+          // Prefer Quoter if available and hooks are not present
           const res = (await quoteExactInputSingle({
             client: publicClient,
             chainId: currentNetwork.chainId,
@@ -160,6 +242,8 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
             tokenOut: toAddr,
             amount: parseFloat(fromAmount),
             tickSpacing,
+            fee: feeTier,
+            hooks,
           })) || (await estimateExactInput({
             client: publicClient,
             chainId: currentNetwork.chainId,
@@ -167,10 +251,24 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
             tokenOut: toAddr,
             amount: parseFloat(fromAmount),
             tickSpacing,
+            fee: feeTier,
+            hooks,
           }));
+          console.debug("quoteExactInputSingle/estimateExactInput result:", res);
+          if (hooks && hooks !== ("0x0000000000000000000000000000000000000000" as any)) {
+            console.debug("Quoter skipped due to hooks; using state-view estimate.");
+          }
           if (res) {
             setOnchainRate(res.rate);
             setToAmount(res.amountOut!.toFixed(6));
+            console.debug("✅ setToAmount from on-chain:", res.amountOut!.toFixed(6), "rate:", res.rate);
+          } else if (exchangeRate) {
+            // Fallback to Coingecko-derived rate if on-chain quote unavailable
+            const calc = parseFloat(fromAmount) * exchangeRate;
+            if (isFinite(calc)) setToAmount(calc.toFixed(6));
+            console.debug("⚠️ Fallback Coingecko setToAmount:", calc.toFixed(6), "exchangeRate:", exchangeRate);
+          } else {
+            console.warn("❌ No quote and no exchangeRate fallback available");
           }
         } else if (!isFromInput && toAmount) {
           const res = (await quoteExactOutputSingle({
@@ -180,6 +278,8 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
             tokenOut: toAddr,
             amount: parseFloat(toAmount),
             tickSpacing,
+            fee: feeTier,
+            hooks,
           })) || (await estimateExactOutput({
             client: publicClient,
             chainId: currentNetwork.chainId,
@@ -188,21 +288,126 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
             amount: parseFloat(toAmount),
             tickSpacing,
           }));
+          console.debug("quoteExactOutputSingle/estimateExactOutput result:", res);
+          if (hooks && hooks !== ("0x0000000000000000000000000000000000000000" as any)) {
+            console.debug("Quoter skipped due to hooks; using state-view estimate for exact output.");
+          }
           if (res) {
             setOnchainRate(res.rate);
             setFromAmount(res.amountIn!.toFixed(6));
+             console.debug("✅ setFromAmount from on-chain:", res.amountIn!.toFixed(6), "rate:", res.rate);
+          } else if (exchangeRate && exchangeRate > 0) {
+            // Fallback using reverse of Coingecko rate
+            const calc = parseFloat(toAmount) / exchangeRate;
+            if (isFinite(calc)) setFromAmount(calc.toFixed(6));
+            console.debug("⚠️ Fallback Coingecko setFromAmount:", calc.toFixed(6), "exchangeRate:", exchangeRate);
+          } else {
+            console.warn("❌ No quote and no exchangeRate fallback available for exact output");
           }
         }
       } catch (e) {
         // Fallback: keep Coingecko-based exchangeRate
-        setOnchainRate(null);
+        console.error("❌ runQuote error:", e);
+        // Nếu quoter lỗi, thử estimate từ stateView trước khi fallback Coingecko
+        try {
+          if (isFromInput && fromAmount) {
+            const est = await estimateExactInput({
+              client: publicClient,
+              chainId: currentNetwork.chainId,
+              tokenIn: fromAddr,
+              tokenOut: toAddr,
+              amount: parseFloat(fromAmount),
+              tickSpacing,
+              fee: feeTier,
+              hooks,
+            });
+            console.debug("estimateExactInput in catch:", est);
+            if (est) {
+              setOnchainRate(est.rate);
+              setToAmount(est.amountOut!.toFixed(6));
+            } else if (exchangeRate) {
+              const calc = parseFloat(fromAmount) * exchangeRate;
+              if (isFinite(calc)) setToAmount(calc.toFixed(6));
+            }
+          } else if (!isFromInput && toAmount) {
+            const est = await estimateExactOutput({
+              client: publicClient,
+              chainId: currentNetwork.chainId,
+              tokenIn: fromAddr,
+              tokenOut: toAddr,
+              amount: parseFloat(toAmount),
+              tickSpacing,
+              fee: feeTier,
+              hooks,
+            });
+            console.debug("estimateExactOutput in catch:", est);
+            if (est) {
+              setOnchainRate(est.rate);
+              setFromAmount(est.amountIn!.toFixed(6));
+            } else if (exchangeRate && exchangeRate > 0) {
+              const calc = parseFloat(toAmount) / exchangeRate;
+              if (isFinite(calc)) setFromAmount(calc.toFixed(6));
+            }
+          }
+        } catch (inner) {
+          console.warn("Fallback estimation also failed:", inner);
+          setOnchainRate(null);
+        }
       } finally {
         setQuoting(false);
+        console.groupEnd();
       }
     };
 
     runQuote();
   }, [publicClient, currentNetwork, pools, fromToken, toToken, isFromInput, fromAmount, toAmount]);
+
+  // Load wallet balances for selected tokens
+  useEffect(() => {
+    const loadBalances = async () => {
+      if (!currentNetwork?.rpcUrl || !walletAddress) {
+        setFromBalance(null);
+        setToBalance(null);
+        return;
+      }
+
+      setLoadingBalances(true);
+      try {
+        const [fb, tb] = await Promise.all([
+          fromToken
+            ? (fromToken.address === "0x0000000000000000000000000000000000000000"
+                ? getNativeBalance(walletAddress, currentNetwork.rpcUrl)
+                : getTokenBalance(fromToken.address, walletAddress, currentNetwork.rpcUrl))
+            : Promise.resolve(null),
+          toToken
+            ? (toToken.address === "0x0000000000000000000000000000000000000000"
+                ? getNativeBalance(walletAddress, currentNetwork.rpcUrl)
+                : getTokenBalance(toToken.address, walletAddress, currentNetwork.rpcUrl))
+            : Promise.resolve(null),
+        ]);
+        setFromBalance(fb);
+        setToBalance(tb);
+      } catch (e) {
+        setFromBalance(null);
+        setToBalance(null);
+      } finally {
+        setLoadingBalances(false);
+      }
+    };
+
+    loadBalances();
+  }, [fromToken, toToken, walletAddress, currentNetwork?.rpcUrl]);
+
+  const formatBalance = (balance: string | null): string => {
+    if (!balance) return "0.00";
+    const num = parseFloat(balance);
+    if (!isFinite(num)) return "0.00";
+    if (num === 0) return "0.00";
+    if (num < 0.0001) return "< 0.0001";
+    if (num < 1) return num.toFixed(6);
+    if (num < 1000) return num.toFixed(4);
+    return num.toFixed(2);
+  };
 
   const handleFromAmountChange = (value: string) => {
     setIsFromInput(true);
@@ -215,42 +420,69 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
   };
 
   const handleSwap = () => {
+    if (!walletAddress) {
+      toast.error("Please connect your wallet to perform a swap.");
+      return;
+    }
     if (!fromToken || !toToken || !fromAmount) {
-      toast.error("Vui lòng điền đầy đủ thông tin");
+      toast.error("Please fill in all swap details.");
       return;
     }
     setShowConfirmDialog(true);
   };
 
-  const handleConfirmSwap = () => {
-    if (!fromToken || !toToken || !fromAmount || !toAmount || !exchangeRate) return;
+  const handleConfirmSwap = async () => {
+    if (!fromToken || !toToken || !fromAmount || !publicClient || !walletClient || !currentNetwork) return;
+    try {
+      setShowConfirmDialog(false);
+      setTxStatus("loading");
+      setTxHash(undefined);
+      setTxDialogOpen(true);
 
-    const fromPrice = prices?.[fromToken.coingeckoId]?.usd || 0;
-    const valueUsd = parseFloat(fromAmount) * fromPrice;
+      // Determine tickSpacing from subgraph pools
+      const fromAddr = fromToken.address as `0x${string}`;
+      const toAddr = toToken.address as `0x${string}`;
+      const selected = selectedPoolId ? liquidPools.find((c) => c.id === selectedPoolId) : undefined;
+      const tickSpacing = selected?.tickSpacing ?? liquidPools[0]?.tickSpacing ?? undefined;
+      const feeTier = selected?.fee ?? liquidPools[0]?.fee ?? undefined;
+      const hooks = selected?.hooks ?? liquidPools[0]?.hooks ?? undefined;
 
-    // Save transaction to localStorage
-    saveTransaction({
-      fromToken: {
-        symbol: fromToken.symbol,
-        logo: fromToken.logo,
-        amount: fromAmount,
-      },
-      toToken: {
-        symbol: toToken.symbol,
-        logo: toToken.logo,
-        amount: toAmount,
-      },
-      exchangeRate,
-      slippage,
-      valueUsd,
-    });
+      const receipt = await swapExactInSingle({
+        publicClient,
+        walletClient,
+        chainId: currentNetwork.chainId,
+        tokenIn: fromAddr,
+        tokenOut: toAddr,
+        amountInHuman: parseFloat(fromAmount),
+        tickSpacing,
+        fee: feeTier,
+        hooks,
+        account: walletAddress as `0x${string}`,
+      });
 
-    setShowConfirmDialog(false);
-    toast.success("Giao dịch đã hoàn tất! (Chế độ demo)");
-    
-    // Reset form
-    setFromAmount("");
-    setToAmount("");
+      const fromPrice = prices?.[fromToken.coingeckoId]?.usd || 0;
+      const valueUsd = parseFloat(fromAmount) * fromPrice;
+
+      saveTransaction({
+        fromToken: { symbol: fromToken.symbol, logo: fromToken.logo, amount: fromAmount },
+        toToken: { symbol: toToken.symbol, logo: toToken.logo, amount: toAmount ?? "" },
+        exchangeRate: onchainRate ?? exchangeRate ?? 0,
+        slippage,
+        valueUsd,
+        txHash: (receipt as any)?.transactionHash,
+      });
+
+      const hash = (receipt as any)?.transactionHash;
+      setTxHash(hash);
+      setTxStatus("success");
+      toast.success(`Swap completed! Tx: ${hash ?? ""}`);
+      setFromAmount("");
+      setToAmount("");
+    } catch (err: any) {
+      console.error("❌ Swap failed:", err?.reason || err?.message || err);
+      setTxStatus("error");
+      toast.error(err?.reason || err?.message || "Swap failed");
+    }
   };
 
   const switchTokens = () => {
@@ -276,16 +508,47 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
           <SlippageSettings slippage={slippage} onSlippageChange={setSlippage} />
         </div>
       </div>
+      {!walletAddress && (
+        <div className="mb-3 p-3 rounded-xl bg-amber-100/10 border border-amber-200/50 text-amber-600 dark:text-amber-400 text-sm">
+          Please connect your wallet to perform swaps.
+        </div>
+      )}
+
+      {/* Fee tier selector: chỉ hiển thị nếu có ít nhất một pool có thanh khoản */}
+      {fromToken && toToken && liquidPools.length > 0 && (
+        <div className="mb-3">
+          <div className="text-sm text-muted-foreground mb-1">Fee Tier</div>
+          <Select value={selectedPoolId ?? undefined} onValueChange={(v) => setSelectedPoolId(v)}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {liquidPools.map((c) => {
+                const pct = c.fee ? (c.fee / 10_000).toFixed(2) + "%" : (c.tickSpacing / 10).toFixed(2) + "%";
+                return (
+                  <SelectItem key={c.id} value={c.id}>
+                    {pct}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <div className="space-y-2">
         {/* From Token */}
         <div className="bg-muted/50 rounded-2xl p-4 border border-glass">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-muted-foreground">Bạn trả</span>
+            <span className="text-sm text-muted-foreground">You pay</span>
             <span className="text-sm text-muted-foreground">
               {fromToken && prices?.[fromToken.coingeckoId]?.usd && fromAmount
                 ? `~$${(parseFloat(fromAmount) * (prices[fromToken.coingeckoId].usd || 0)).toFixed(2)}`
-                : 'Số dư: 0.00'}
+                : loadingBalances
+                  ? 'Loading...'
+                  : walletAddress
+                    ? `Balance: ${formatBalance(fromBalance)}`
+                    : 'Connect wallet'}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -294,7 +557,7 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
               placeholder="0.0"
               value={fromAmount}
               onChange={(e) => handleFromAmountChange(e.target.value)}
-              className="border-0 bg-transparent text-2xl font-semibold p-0 h-auto focus-visible:ring-0"
+              className="border-0 bg-transparent text-3xl font-semibold p-0 h-12 focus-visible:ring-0"
             />
             <TokenSelector selectedToken={fromToken} onSelectToken={setFromToken} tokens={allTokens} />
           </div>
@@ -311,7 +574,7 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
             variant="ghost"
             size="icon"
             onClick={switchTokens}
-            disabled={!fromToken || !toToken}
+            disabled={!walletAddress || !fromToken || !toToken}
             className="h-10 w-10 rounded-xl bg-card border border-glass hover:bg-muted/50 transition-all hover:rotate-180 disabled:opacity-50"
           >
             <ArrowUpDown className="h-5 w-5" />
@@ -321,11 +584,15 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
         {/* To Token */}
         <div className="bg-muted/50 rounded-2xl p-4 border border-glass">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-muted-foreground">Bạn nhận</span>
+            <span className="text-sm text-muted-foreground">You receive</span>
             <span className="text-sm text-muted-foreground">
               {toToken && prices?.[toToken.coingeckoId]?.usd && toAmount
                 ? `~$${(parseFloat(toAmount) * (prices[toToken.coingeckoId].usd || 0)).toFixed(2)}`
-                : 'Số dư: 0.00'}
+                : loadingBalances
+                  ? 'Loading...'
+                  : walletAddress
+                    ? `Balance: ${formatBalance(toBalance)}`
+                    : 'Connect wallet'}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -334,7 +601,7 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
               placeholder="0.0"
               value={toAmount}
               onChange={(e) => handleToAmountChange(e.target.value)}
-              className="border-0 bg-transparent text-2xl font-semibold p-0 h-auto focus-visible:ring-0"
+              className="border-0 bg-transparent text-3xl font-semibold p-0 h-12 focus-visible:ring-0"
             />
             <TokenSelector selectedToken={toToken} onSelectToken={setToToken} tokens={allTokens} allowedAddresses={allowedToAddresses} />
           </div>
@@ -349,13 +616,13 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
       {fromToken && toToken && exchangeRate && (fromAmount || toAmount) && (
         <div className="mt-4 p-3 bg-muted/30 rounded-xl border border-glass space-y-2">
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Tỷ giá</span>
+            <span className="text-muted-foreground">Exchange rate</span>
             <span className="font-medium">
               1 {fromToken.symbol} = {exchangeRate.toFixed(6)} {toToken.symbol}
             </span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Tỷ giá ngược</span>
+            <span className="text-muted-foreground">Inverse rate</span>
             <span className="font-medium">
               1 {toToken.symbol} = {(1 / exchangeRate).toFixed(6)} {fromToken.symbol}
             </span>
@@ -365,7 +632,7 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
             <span className="font-medium">{slippage}%</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Số lượng tối thiểu nhận được</span>
+            <span className="text-muted-foreground">Minimum received</span>
             <span className="font-medium">
               {(parseFloat(toAmount) * (1 - slippage / 100)).toFixed(6)} {toToken.symbol}
             </span>
@@ -375,10 +642,10 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
 
       <Button 
         onClick={handleSwap}
-        disabled={!fromToken || !toToken || !fromAmount || pricesLoading}
+        disabled={!walletAddress || !fromToken || !toToken || !fromAmount || pricesLoading}
         className="w-full mt-4 h-14 text-lg font-semibold bg-gradient-primary hover:opacity-90 transition-opacity disabled:opacity-50"
       >
-        {pricesLoading ? 'Đang tải giá...' : 'Hoán đổi'}
+        {pricesLoading ? 'Loading price...' : (!walletAddress ? 'Connect wallet to swap' : 'Swap')}
       </Button>
     </Card>
 
@@ -399,6 +666,14 @@ export const SwapCard = ({ onTokensChange }: SwapCardProps) => {
         }}
       />
     )}
+
+    <TxStatusDialog
+      open={txDialogOpen}
+      onOpenChange={setTxDialogOpen}
+      status={txStatus}
+      chainId={currentNetwork?.chainId}
+      txHash={txHash}
+    />
     </>
   );
 };

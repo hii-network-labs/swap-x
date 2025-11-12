@@ -1,6 +1,7 @@
 export interface Transaction {
   id: string;
   timestamp: number;
+  txHash?: string;
   fromToken: {
     symbol: string;
     logo: string;

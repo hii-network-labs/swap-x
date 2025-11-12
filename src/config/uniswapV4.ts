@@ -99,6 +99,25 @@ export const POSITION_MANAGER_ABI = [
     stateMutability: "view",
     type: "function",
   },
+   {
+      "inputs": [
+         {
+            "internalType": "uint256",
+            "name": "tokenId",
+            "type": "uint256"
+         }
+      ],
+      "name": "getPositionLiquidity",
+      "outputs": [
+         {
+            "internalType": "uint128",
+            "name": "liquidity",
+            "type": "uint128"
+         }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+   },
 ] as const;
 
 export const STATE_VIEW_ABI = [
@@ -184,6 +203,18 @@ export const PERMIT2_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint160" },
+      { name: "expiration", type: "uint48" },
+    ],
+    name: "approve",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
 ] as const;
 
 export const ERC20_ABI = [
@@ -195,6 +226,16 @@ export const ERC20_ABI = [
     name: "approve",
     outputs: [{ name: "", type: "bool" }],
     stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    name: "allowance",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
     type: "function",
   },
   {
@@ -218,6 +259,36 @@ export const ERC20_ABI = [
     stateMutability: "view",
     type: "function",
   },
+] as const;
+
+// Minimal Universal Router ABI for execute
+export const UNIVERSAL_ROUTER_ABI = [
+  // execute function
+  {
+    inputs: [
+      { name: "commands", type: "bytes" },
+      { name: "inputs", type: "bytes[]" },
+      { name: "deadline", type: "uint256" },
+    ],
+    name: "execute",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  // Common Universal Router errors to enable revert decoding
+  { type: "error", name: "ExecutionFailed", inputs: [
+    { name: "commandIndex", type: "uint256" },
+    { name: "message", type: "bytes" },
+  ] },
+  { type: "error", name: "TransactionDeadlinePassed", inputs: [] },
+  { type: "error", name: "InsufficientETH", inputs: [] },
+  { type: "error", name: "InsufficientToken", inputs: [] },
+  { type: "error", name: "InvalidCommandType", inputs: [
+    { name: "commandType", type: "uint256" },
+  ] },
+  { type: "error", name: "LengthMismatch", inputs: [] },
+  { type: "error", name: "SliceOutOfBounds", inputs: [] },
+  { type: "error", name: "UnsafeCast", inputs: [] },
 ] as const;
 
 export const PERMIT2_TYPES = {

@@ -44,7 +44,7 @@ export const SlippageSettings = ({ slippage, onSlippageChange }: SlippageSetting
       <PopoverContent className="w-80" align="end">
         <div className="space-y-4">
           <div>
-            <h3 className="font-semibold mb-1">Cài đặt giao dịch</h3>
+            <h3 className="font-semibold mb-1">Swap Settings</h3>
             <p className="text-sm text-muted-foreground">
               Slippage tolerance
             </p>
@@ -68,7 +68,7 @@ export const SlippageSettings = ({ slippage, onSlippageChange }: SlippageSetting
             <div className="relative">
               <Input
                 type="number"
-                placeholder="Tùy chỉnh"
+                placeholder="Custom"
                 value={customValue}
                 onChange={(e) => handleCustomChange(e.target.value)}
                 className="pr-8"
@@ -83,19 +83,19 @@ export const SlippageSettings = ({ slippage, onSlippageChange }: SlippageSetting
 
             {customValue && parseFloat(customValue) > 5 && (
               <p className="text-xs text-amber-500">
-                ⚠️ Slippage cao có thể dẫn đến kết quả giao dịch không tốt
+                ⚠️ High slippage may lead to poor execution
               </p>
             )}
 
             {customValue && (parseFloat(customValue) <= 0 || parseFloat(customValue) > 50) && (
               <p className="text-xs text-destructive">
-                Slippage phải từ 0.01% đến 50%
+                Slippage must be between 0.01% and 50%
               </p>
             )}
           </div>
 
           <div className="text-xs text-muted-foreground pt-2 border-t">
-            Slippage tolerance là mức chênh lệch giá tối đa bạn chấp nhận trong giao dịch.
+            Slippage tolerance is the maximum price deviation you accept.
           </div>
         </div>
       </PopoverContent>

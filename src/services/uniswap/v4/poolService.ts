@@ -32,22 +32,33 @@ export async function getPool(
       throw new Error(`V4 not supported on chain ${chainId}`);
     }
 
+    // Ensure canonical token ordering for poolKey/poolId
+    const token0IsA = token0.address.toLowerCase() < token1.address.toLowerCase();
+    const currency0 = token0IsA ? token0 : token1;
+    const currency1 = token0IsA ? token1 : token0;
+
     const poolKey: PoolKey = {
-      currency0: token0.address as Address,
-      currency1: token1.address as Address,
+      currency0: currency0.address as Address,
+      currency1: currency1.address as Address,
       fee,
       tickSpacing,
       hooks: hookAddress,
     };
 
     // Get poolId using V4 SDK
+    console.groupCollapsed("🔎 V4Pool/getPool");
+    console.debug("chainId:", chainId);
+    console.debug("token0:", token0.symbol, token0.address, token0.decimals);
+    console.debug("token1:", token1.symbol, token1.address, token1.decimals);
+    console.debug("fee:", fee, "tickSpacing:", tickSpacing, "hooks:", hookAddress);
     const poolId = Pool.getPoolId(
-      token0,
-      token1,
+      currency0,
+      currency1,
       fee,
       tickSpacing,
       hookAddress
     );
+    console.debug("poolId:", poolId);
 
     const [slot0, liquidity] = await Promise.all([
       client.readContract({
@@ -67,11 +78,12 @@ export async function getPool(
     const sqrtPriceX96Current = (slot0 as any)[0] as bigint;
     const currentTick = (slot0 as any)[1] as number;
     const currentLiquidity = liquidity as bigint;
+    console.debug("slot0:", slot0, "liquidity:", liquidity);
 
     // Create V4 Pool instance using string values for BigintIsh inputs
     const pool = new Pool(
-      token0,
-      token1,
+      currency0,
+      currency1,
       fee,
       tickSpacing,
       hookAddress,
@@ -89,6 +101,7 @@ export async function getPool(
     };
   } catch (error) {
     console.error("❌ Error in getPool:", error);
+    console.groupEnd();
     return null;
   }
 }

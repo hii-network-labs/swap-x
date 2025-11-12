@@ -38,9 +38,9 @@ const History = () => {
       <div className="min-h-[calc(100vh-73px)] bg-gradient-bg flex items-center justify-center p-4">
         <Card className="p-8 bg-card/80 backdrop-blur-xl border-glass text-center max-w-md">
           <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
-          <h2 className="text-2xl font-bold mb-2">Đang tải giao dịch</h2>
+          <h2 className="text-2xl font-bold mb-2">Loading transactions</h2>
           <p className="text-muted-foreground">
-            Đang lấy dữ liệu từ blockchain...
+            Fetching data from the blockchain...
           </p>
         </Card>
       </div>
@@ -56,7 +56,7 @@ const History = () => {
               Transactions
             </h1>
             <p className="text-muted-foreground">
-              Tất cả các giao dịch trên tất cả các pool - Cập nhật tự động
+              All transactions across all pools — Auto-updates
             </p>
           </div>
           
@@ -67,7 +67,7 @@ const History = () => {
             disabled={isLoading}
           >
             <RefreshCcw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-            Làm mới
+            Refresh
           </Button>
         </div>
 
@@ -84,10 +84,10 @@ const History = () => {
           {transactions.length === 0 ? (
             <div className="p-12 text-center">
               <div className="text-muted-foreground text-lg mb-4">
-                Chưa có giao dịch nào
+                No transactions yet
               </div>
               <p className="text-sm text-muted-foreground">
-                Các giao dịch sẽ xuất hiện ở đây khi có hoạt động trên pool
+                Transactions will appear here when there is pool activity
               </p>
             </div>
           ) : (
@@ -95,11 +95,11 @@ const History = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Thời gian</TableHead>
-                    <TableHead>Loại</TableHead>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Type</TableHead>
                     <TableHead>Pool</TableHead>
-                    <TableHead>Chi tiết</TableHead>
-                    <TableHead>Người gửi</TableHead>
+                    <TableHead>Details</TableHead>
+                    <TableHead>Sender</TableHead>
                     <TableHead className="text-right">Block</TableHead>
                   </TableRow>
                 </TableHeader>

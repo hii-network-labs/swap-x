@@ -1,6 +1,14 @@
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
-import { Wallet } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Wallet, ChevronDown } from "lucide-react";
 import { NetworkSelector } from "./NetworkSelector";
 import { useNetwork } from "@/contexts/NetworkContext";
 
@@ -22,6 +30,29 @@ export const Header = () => {
     }
   };
 
+  const switchWallet = async () => {
+    if (typeof window.ethereum !== 'undefined') {
+      try {
+        // Request permissions to allow account selection UI
+        await window.ethereum.request({
+          method: 'wallet_requestPermissions',
+          params: [{ eth_accounts: {} }],
+        });
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        setWalletAddress(accounts?.[0] ?? null);
+      } catch (error) {
+        console.error("Failed to switch wallet:", error);
+      }
+    } else {
+      alert('Please install MetaMask to use this feature');
+    }
+  };
+
+  const disconnectWallet = () => {
+    // Clear connected address from app state
+    setWalletAddress(null as any);
+  };
+
   const formatAddress = (address: string) => {
     return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
   };
@@ -32,7 +63,7 @@ export const Header = () => {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-8">
             <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-              DeFiSwap
+              SwapX
             </h1>
             <nav className="hidden md:flex gap-6">
               <NavLink 
@@ -61,13 +92,35 @@ export const Header = () => {
           
           <div className="flex items-center gap-2">
             <NetworkSelector />
-            <Button 
-              onClick={connectWallet}
-              className="bg-gradient-primary hover:opacity-90 transition-opacity"
-            >
-              <Wallet className="mr-2 h-4 w-4" />
-              {walletAddress ? formatAddress(walletAddress) : 'Connect Wallet'}
-            </Button>
+            {!walletAddress ? (
+              <Button
+                onClick={connectWallet}
+                className="bg-gradient-primary hover:opacity-90 transition-opacity"
+              >
+                <Wallet className="mr-2 h-4 w-4" />
+                Connect Wallet
+              </Button>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button className="bg-gradient-primary hover:opacity-90 transition-opacity gap-2">
+                    <Wallet className="h-4 w-4" />
+                    {formatAddress(walletAddress)}
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 bg-card border-glass">
+                <DropdownMenuLabel>Wallet</DropdownMenuLabel>
+                  <DropdownMenuSeparator className="bg-glass" />
+                  <DropdownMenuItem onClick={switchWallet} className="cursor-pointer">
+                  Switch wallet
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={disconnectWallet} className="cursor-pointer text-destructive">
+                    Log out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         </div>
       </div>

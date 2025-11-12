@@ -30,10 +30,10 @@ interface FeeTier {
 }
 
 const FEE_TIERS: FeeTier[] = [
-  { percentage: "0.01%", description: "Tốt nhất cho các cặp rất ổn định", tvl: "0 TVL" },
-  { percentage: "0.05%", description: "Tốt nhất cho các cặp ổn định", tvl: "0 TVL" },
-  { percentage: "0.3%", description: "Tốt nhất cho hầu hết các cặp", tvl: "0 TVL" },
-  { percentage: "1%", description: "Tốt nhất cho các cặp đặc biệt", tvl: "0 TVL" },
+  { percentage: "0.01%", description: "Best for very stable pairs", tvl: "0 TVL" },
+  { percentage: "0.05%", description: "Best for stable pairs", tvl: "0 TVL" },
+  { percentage: "0.3%", description: "Best for most pairs", tvl: "0 TVL" },
+  { percentage: "1%", description: "Best for exotic pairs", tvl: "0 TVL" },
 ];
 
 interface CreatePoolDialogProps {
@@ -71,8 +71,8 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
     } catch (error) {
       console.error("Error loading tokens:", error);
       toast({
-        title: "Lỗi tải token",
-        description: "Không thể tải danh sách token. Vui lòng thử lại.",
+        title: "Failed to load tokens",
+        description: "Unable to load token list. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -100,21 +100,21 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
               return exists ? prev : [foundToken, ...prev];
             });
             toast({
-              title: "Token tìm thấy!",
+              title: "Token found!",
               description: `${foundToken.symbol} - ${foundToken.name}`,
             });
           } else {
             toast({
-              title: "Token không hợp lệ",
-              description: "Không tìm thấy token ERC20 với địa chỉ này trên mạng hiện tại.",
+              title: "Invalid token",
+              description: "No ERC20 token found with this address on the current network.",
               variant: "destructive",
             });
           }
         } catch (error) {
           console.error("Error searching token:", error);
           toast({
-            title: "Lỗi tìm kiếm",
-            description: "Có lỗi xảy ra khi tìm kiếm token. Vui lòng thử lại.",
+            title: "Search error",
+            description: "An error occurred while searching for token. Please try again.",
             variant: "destructive",
           });
         } finally {
@@ -145,8 +145,8 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
     // Reload tokens
     loadTokens();
     toast({
-      title: "Token đã xóa",
-      description: "Token đã được xóa khỏi danh sách của bạn.",
+      title: "Token removed",
+      description: "Token has been removed from your list.",
     });
   };
 
@@ -164,14 +164,14 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
               <span className="font-semibold text-lg">{token.symbol}</span>
             </div>
           ) : (
-            <span className="text-muted-foreground">Chọn token</span>
+            <span className="text-muted-foreground">Select token</span>
           )}
           <ChevronDown className="h-4 w-4 text-muted-foreground" />
         </button>
         <DialogContent className="bg-card border-glass">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
-              <span>Chọn token</span>
+              <span>Select token</span>
               <Badge variant="outline" className="border-glass">
                 {currentNetwork.name}
               </Badge>
@@ -183,7 +183,7 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
               <Loader2 className="absolute right-3 top-3 h-4 w-4 text-muted-foreground animate-spin" />
             )}
             <Input
-              placeholder="Tìm kiếm tên hoặc địa chỉ token (0x...)"
+              placeholder="Search token name or address (0x...)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10 pr-10 bg-muted/50 border-glass"
@@ -198,9 +198,9 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
               <div className="space-y-1">
                 {filteredTokens.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
-                    <p>Không tìm thấy token</p>
+                    <p>No tokens found</p>
                     <p className="text-xs mt-2">
-                      Thử nhập địa chỉ contract (0x...)
+                      Try entering the contract address (0x...)
                     </p>
                   </div>
                 ) : (
@@ -235,7 +235,7 @@ const TokenPicker = ({ token, onSelect, label }: TokenPickerProps) => {
                           <button
                             onClick={(e) => handleRemoveToken(t.address, e)}
                             className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md bg-destructive/20 hover:bg-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="Xóa token này"
+                            title="Remove this token"
                           >
                             <X className="h-4 w-4 text-destructive" />
                           </button>
@@ -317,24 +317,24 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     setCustomFeeError(null);
     
     if (!value) {
-      setCustomFeeError("Vui lòng nhập phí");
+      setCustomFeeError("Please enter a fee");
       return false;
     }
 
     const numValue = parseFloat(value);
     
     if (isNaN(numValue)) {
-      setCustomFeeError("Giá trị không hợp lệ");
+      setCustomFeeError("Invalid value");
       return false;
     }
 
     if (numValue < 0.0001) {
-      setCustomFeeError("Phí tối thiểu là 0.0001%");
+      setCustomFeeError("Minimum fee is 0.0001%");
       return false;
     }
 
     if (numValue > 99.9999) {
-      setCustomFeeError("Phí tối đa là 99.9999%");
+      setCustomFeeError("Maximum fee is 99.9999%");
       return false;
     }
 
@@ -377,7 +377,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     setPriceRangeError(null);
     
     if (!minPrice || !maxPrice) {
-      setPriceRangeError("Vui lòng nhập cả giá min và max");
+      setPriceRangeError("Please enter both min and max price");
       return false;
     }
     
@@ -385,17 +385,17 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
     const max = parseFloat(maxPrice);
     
     if (isNaN(min) || isNaN(max)) {
-      setPriceRangeError("Giá trị không hợp lệ");
+      setPriceRangeError("Invalid value");
       return false;
     }
     
     if (min <= 0 || max <= 0) {
-      setPriceRangeError("Giá phải lớn hơn 0");
+      setPriceRangeError("Price must be greater than 0");
       return false;
     }
     
     if (min >= max) {
-      setPriceRangeError("Giá Min phải nhỏ hơn giá Max");
+      setPriceRangeError("Min price must be less than Max price");
       return false;
     }
     
@@ -463,13 +463,21 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
   const canContinueStep2 = amount1 && amount2 && isPriceRangeValid();
 
   const handleContinue = () => {
+    if (!walletAddress) {
+      toast({
+        title: "Wallet not connected",
+        description: "Please connect your wallet to continue.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (step === 1 && canContinueStep1) {
       setStep(2);
     } else if (step === 2) {
       if (!validatePriceRange()) {
         toast({
-          title: "Lỗi khoảng giá",
-          description: priceRangeError || "Vui lòng kiểm tra lại khoảng giá",
+          title: "Invalid price range",
+          description: priceRangeError || "Please check the price range",
           variant: "destructive",
         });
         return;
@@ -477,8 +485,8 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
       
       if (!amount1 || !amount2) {
         toast({
-          title: "Lỗi số lượng",
-          description: "Vui lòng nhập số lượng cho cả 2 tokens",
+          title: "Invalid amount",
+          description: "Please enter amounts for both tokens",
           variant: "destructive",
         });
         return;
@@ -496,8 +504,8 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
       });
       
       toast({
-        title: "Tạo pool thành công!",
-        description: `Pool ${token1?.symbol}/${token2?.symbol} đã được tạo`,
+        title: "Pool created successfully!",
+        description: `Pool ${token1?.symbol}/${token2?.symbol} has been created`,
       });
       
       handleClose();
@@ -525,7 +533,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
       <DialogContent className="bg-card/95 backdrop-blur-xl border-glass max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold flex items-center justify-between">
-            <span>Vị thế mới</span>
+            <span>New Position</span>
             <Badge 
               variant={currentNetwork.isTestnet ? "outline" : "default"} 
               className={cn(
@@ -537,8 +545,13 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
             </Badge>
           </DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Tạo liquidity position mới trên {currentNetwork.name}
+            Create a new liquidity position on {currentNetwork.name}
           </p>
+          {!walletAddress && (
+            <div className="mt-3 p-3 rounded-xl bg-amber-100/10 border border-amber-200/50 text-amber-600 dark:text-amber-400 text-sm">
+              Please connect your wallet to add liquidity.
+            </div>
+          )}
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-1">
@@ -552,8 +565,8 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                 1
               </div>
               <div>
-                <div className="text-sm font-medium">Bước 1</div>
-                <div className="text-xs text-muted-foreground">Chọn cặp token và phí</div>
+                <div className="text-sm font-medium">Step 1</div>
+                <div className="text-xs text-muted-foreground">Select token pair and fee</div>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -564,8 +577,8 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                 2
               </div>
               <div>
-                <div className="text-sm font-medium">Bước 2</div>
-                <div className="text-xs text-muted-foreground">Đặt khoảng giá và số tiền nạp</div>
+                <div className="text-sm font-medium">Step 2</div>
+                <div className="text-xs text-muted-foreground">Set price range and deposit amount</div>
               </div>
             </div>
           </div>
@@ -573,47 +586,47 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
           {step === 1 && (
             <div className="space-y-6">
               <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-glass">
-                <h3 className="font-semibold">Chọn cặp</h3>
+                <h3 className="font-semibold">Select pair</h3>
                 <p className="text-sm text-muted-foreground">
-                  Chọn token bạn muốn cung cấp thanh khoản. Bạn có thể chọn token trên tất cả các mạng được hỗ trợ.
+                  Choose tokens you want to provide liquidity for. You can select tokens across supported networks.
                 </p>
                 <div className="grid grid-cols-2 gap-4">
-                  <TokenPicker token={token1} onSelect={setToken1} label="Token đầu tiên" />
-                  <TokenPicker token={token2} onSelect={setToken2} label="Token thứ hai" />
+                  <TokenPicker token={token1} onSelect={setToken1} label="First token" />
+                  <TokenPicker token={token2} onSelect={setToken2} label="Second token" />
                 </div>
               </div>
 
               <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-glass">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">Bậc phí</h3>
+                  <h3 className="font-semibold">Fee tier</h3>
                   <div className="flex items-center gap-1 text-muted-foreground">
                     <Info className="h-4 w-4" />
-                    <span className="text-xs">Ít hơn</span>
+                    <span className="text-xs">Lower</span>
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Số tiền kiếm được cung cấp thanh khoản. Chọn số tiền phù hợp với khả năng chịu rủi ro và chiến lược của bạn.
+                  Earnings from providing liquidity. Choose a fee that fits your risk tolerance and strategy.
                 </p>
 
                 {/* Fee Tier Selection */}
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 mb-3">
                     <span className="text-sm font-medium">
-                      Bậc phí {selectedFee || "0,0001%"}
+                      Fee tier {selectedFee || "0.0001%"}
                     </span>
                     {selectedFee && !isCustomFee && (
                       <span className="text-xs px-2 py-1 rounded-full bg-primary/20 text-primary">
-                        TVL cao nhất
+                        Highest TVL
                       </span>
                     )}
                     {isCustomFee && selectedFee && (
                       <span className="text-xs px-2 py-1 rounded-full bg-secondary/20 text-secondary">
-                        Tùy chọn
+                        Custom
                       </span>
                     )}
                   </div>
                   <span className="text-xs text-muted-foreground">
-                    Phần trăm phí bạn sẽ nhận được
+                    Percentage of trading fees you will receive
                   </span>
 
                   <div className="grid grid-cols-2 gap-3 mt-4">
@@ -638,7 +651,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                   {/* Custom Fee Input */}
                   <div className="mt-4 p-4 rounded-lg border border-glass bg-muted/20">
                     <div className="flex items-center justify-between mb-3">
-                      <Label className="font-semibold">Bậc phí tùy chọn</Label>
+                      <Label className="font-semibold">Custom fee tier</Label>
                       <span className="text-xs text-muted-foreground">0.0001% - 99.9999%</span>
                     </div>
                     <div className="flex gap-2">
@@ -646,7 +659,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                         <div className="relative">
                           <Input
                             type="text"
-                            placeholder="Nhập phí (vd: 0.5)"
+                            placeholder="Enter fee (e.g., 0.5)"
                             value={customFeeInput}
                             onChange={(e) => handleCustomFeeChange(e.target.value)}
                             onFocus={handleCustomFeeToggle}
@@ -665,7 +678,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground mt-2">
-                      Phí cao hơn có thể mang lại lợi nhuận cao hơn nhưng giảm tính cạnh tranh
+                      Higher fees may increase earnings but reduce competitiveness
                     </p>
                   </div>
 
@@ -673,7 +686,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                   <div className="relative mt-4 hidden">
                     <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input
-                      placeholder="Tìm kiếm hoặc tạo các bậc phí khác (Nâng cao)"
+                      placeholder="Search or create other fee tiers (Advanced)"
                       value={feeSearch}
                       onChange={(e) => setFeeSearch(e.target.value)}
                       className="pl-10 bg-muted/50 border-glass text-sm"
@@ -689,18 +702,18 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
             <div className="space-y-6">
               {/* Pool Info Summary */}
               <div className="p-4 rounded-lg bg-muted/30 border border-glass">
-                <h3 className="font-semibold mb-3">Thông tin pool</h3>
+                <h3 className="font-semibold mb-3">Pool information</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Cặp:</span>
+                    <span className="text-muted-foreground">Pair:</span>
                     <span className="font-medium">{token1?.symbol}/{token2?.symbol}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Phí:</span>
+                    <span className="text-muted-foreground">Fee:</span>
                     <span className="font-medium">{selectedFee}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Giá hiện tại:</span>
+                    <span className="text-muted-foreground">Current price:</span>
                     <span className="font-medium">
                       {currentPrice} {token2?.symbol}/{token1?.symbol}
                     </span>
@@ -711,18 +724,18 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
               {/* Price Range */}
               <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-glass">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">Đặt khoảng giá</h3>
+                  <h3 className="font-semibold">Set price range</h3>
                   <Badge variant="outline" className="border-glass text-xs">
                     {token2?.symbol}/{token1?.symbol}
                   </Badge>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Thanh khoản của bạn sẽ hoạt động trong khoảng giá này. Giá ngoài khoảng này sẽ không được sử dụng.
+                  Your liquidity will be active within this range. Prices outside it won’t be used.
                 </p>
                 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Giá Min</Label>
+                    <Label>Min price</Label>
                     <div className="relative">
                       <Input
                         type="text"
@@ -742,7 +755,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                   </div>
                   
                   <div className="space-y-2">
-                    <Label>Giá Max</Label>
+                    <Label>Max price</Label>
                     <div className="relative">
                       <Input
                         type="text"
@@ -776,7 +789,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     }}
                     className="flex-1 border-glass"
                   >
-                    Khoảng hẹp
+                    Narrow range
                   </Button>
                   <Button
                     variant="outline"
@@ -787,7 +800,7 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     }}
                     className="flex-1 border-glass"
                   >
-                    Khoảng rộng
+                    Wide range
                   </Button>
                   <Button
                     variant="outline"
@@ -798,16 +811,16 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     }}
                     className="flex-1 border-glass"
                   >
-                    Toàn bộ
+                    Full range
                   </Button>
                 </div>
               </div>
 
               {/* Deposit Amounts */}
               <div className="space-y-4 p-4 rounded-lg bg-muted/30 border border-glass">
-                <h3 className="font-semibold">Số lượng nạp</h3>
+                <h3 className="font-semibold">Deposit amounts</h3>
                 <p className="text-sm text-muted-foreground">
-                  Nhập số lượng token bạn muốn thêm vào pool
+                  Enter token amounts to add to the pool
                 </p>
                 
                 <div className="space-y-3">
@@ -893,10 +906,10 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
 
               {/* Position Preview */}
               <div className="p-4 rounded-lg bg-gradient-to-br from-primary/5 to-secondary/5 border border-glass">
-                <h3 className="font-semibold mb-3">Xem trước position</h3>
+                <h3 className="font-semibold mb-3">Position preview</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Khoảng giá:</span>
+                    <span className="text-muted-foreground">Price range:</span>
                     <span className="font-medium">
                       {minPrice || "0"} - {maxPrice || "∞"}
                     </span>
@@ -906,16 +919,16 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
                     <span className="font-medium">{calculateLiquidity()}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">{token1?.symbol} nạp:</span>
+                    <span className="text-muted-foreground">Deposit {token1?.symbol}:</span>
                     <span className="font-medium">{amount1 || "0"} {token1?.symbol}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">{token2?.symbol} nạp:</span>
+                    <span className="text-muted-foreground">Deposit {token2?.symbol}:</span>
                     <span className="font-medium">{amount2 || "0"} {token2?.symbol}</span>
                   </div>
                   <div className="pt-2 mt-2 border-t border-glass/50">
                     <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Phí giao dịch:</span>
+                      <span className="text-muted-foreground">Pool fee:</span>
                       <span className="font-medium">{selectedFee}</span>
                     </div>
                   </div>
@@ -932,18 +945,18 @@ export const CreatePoolDialog = ({ open, onOpenChange }: CreatePoolDialogProps) 
               variant="outline"
               className="flex-1 border-glass"
             >
-              Quay lại
+              Back
             </Button>
           )}
           <Button
             onClick={handleContinue}
-            disabled={step === 1 ? !canContinueStep1 : !canContinueStep2}
+            disabled={!walletAddress || (step === 1 ? !canContinueStep1 : !canContinueStep2)}
             className={cn(
               "bg-gradient-primary hover:opacity-90 transition-opacity disabled:opacity-50",
               step === 1 ? "w-full" : "flex-1"
             )}
           >
-            {step === 1 ? "Tiếp tục" : "Tạo Position"}
+            {step === 1 ? "Continue" : "Create Position"}
           </Button>
         </div>
       </DialogContent>

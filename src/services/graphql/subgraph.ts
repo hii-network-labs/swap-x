@@ -1,4 +1,4 @@
-const SUBGRAPH_URL = "https://graph-node.sb.teknix.dev/subgraphs/name/subgraph-swap-hii-3";
+const SUBGRAPH_URL = "https://graph-node.sb.teknix.dev/subgraphs/name/subgraph-swap-hii-5";
 
 export interface Pool {
   id: string;
@@ -17,8 +17,14 @@ export interface Pool {
   tickSpacing: string;
   liquidity: string;
   tick: string;
+  sqrtPrice?: string;
+  feeTier?: string;
+  hooks?: string;
   volumeToken0: string;
   volumeToken1: string;
+  volumeUSD?: string;
+  feesUSD?: string;
+  totalValueLockedUSD?: string;
   txCount: string;
 }
 
@@ -26,6 +32,20 @@ export interface Position {
   id: string;
   tokenId: string;
   owner: string;
+  poolId?: string;
+  liquidity?: string;
+  tickLower?: string;
+  tickUpper?: string;
+  pool?: {
+    id: string;
+    tick: string;
+    tickSpacing: string;
+    token0: { id: string; symbol: string; decimals: string };
+    token1: { id: string; symbol: string; decimals: string };
+    feeTier?: string;
+    sqrtPrice?: string;
+    liquidity?: string;
+  };
   transfers: Array<{
     id: string;
   }>;
@@ -70,6 +90,37 @@ export interface GraphTransaction {
   }>;
 }
 
+export interface GlobalStats {
+  poolCount: string;
+  txCount: string;
+  totalVolumeUSD?: string;
+  totalVolumeETH?: string;
+}
+
+export interface Swap {
+  id: string;
+  sender: string;
+  amount0: string;
+  amount1: string;
+  timestamp?: string;
+  transaction?: { id: string; blockNumber: string };
+  pool: {
+    id: string;
+    token0: { id: string; symbol: string; name?: string; decimals?: string };
+    token1: { id: string; symbol: string; name?: string; decimals?: string };
+  };
+}
+
+export interface PoolDayData {
+  date: string;
+  liquidity: string;
+  sqrtPrice: string;
+  token0Price: string;
+  token1Price: string;
+  volumeToken0: string;
+  volumeToken1: string;
+}
+
 async function fetchGraphQL(query: string, variables?: Record<string, any>) {
   const response = await fetch(SUBGRAPH_URL, {
     method: "POST",
@@ -96,7 +147,8 @@ async function fetchGraphQL(query: string, variables?: Record<string, any>) {
 }
 
 export async function fetchPools(first: number = 100, skip: number = 0): Promise<Pool[]> {
-  const query = `
+  // Attempt extended fields per Uniswap v4 docs, with fallback to minimal schema
+  const extendedQuery = `
     query GetPools($first: Int!, $skip: Int!) {
       pools(
         first: $first
@@ -105,18 +157,34 @@ export async function fetchPools(first: number = 100, skip: number = 0): Promise
         orderDirection: desc
       ) {
         id
-        token0 {
-          id
-          symbol
-          name
-          decimals
-        }
-        token1 {
-          id
-          symbol
-          name
-          decimals
-        }
+        token0 { id symbol name decimals }
+        token1 { id symbol name decimals }
+        tickSpacing
+        liquidity
+        tick
+        sqrtPrice
+        feeTier
+        hooks
+        volumeToken0
+        volumeToken1
+        volumeUSD
+        feesUSD
+        totalValueLockedUSD
+        txCount
+      }
+    }
+  `;
+  const minimalQuery = `
+    query GetPools($first: Int!, $skip: Int!) {
+      pools(
+        first: $first
+        skip: $skip
+        orderBy: liquidity
+        orderDirection: desc
+      ) {
+        id
+        token0 { id symbol name decimals }
+        token1 { id symbol name decimals }
         tickSpacing
         liquidity
         tick
@@ -126,28 +194,44 @@ export async function fetchPools(first: number = 100, skip: number = 0): Promise
       }
     }
   `;
-
-  const data = await fetchGraphQL(query, { first, skip });
-  return data.pools || [];
+  try {
+    const data = await fetchGraphQL(extendedQuery, { first, skip });
+    return data.pools || [];
+  } catch (e: any) {
+    console.warn("Subgraph: extended pool fields unsupported, falling back:", e?.message);
+    const data = await fetchGraphQL(minimalQuery, { first, skip });
+    return data.pools || [];
+  }
 }
 
 export async function fetchPool(poolId: string): Promise<Pool | null> {
-  const query = `
+  const extendedQuery = `
     query GetPool($id: ID!) {
       pool(id: $id) {
         id
-        token0 {
-          id
-          symbol
-          name
-          decimals
-        }
-        token1 {
-          id
-          symbol
-          name
-          decimals
-        }
+        token0 { id symbol name decimals }
+        token1 { id symbol name decimals }
+        tickSpacing
+        liquidity
+        tick
+        sqrtPrice
+        feeTier
+        hooks
+        volumeToken0
+        volumeToken1
+        volumeUSD
+        feesUSD
+        totalValueLockedUSD
+        txCount
+      }
+    }
+  `;
+  const minimalQuery = `
+    query GetPool($id: ID!) {
+      pool(id: $id) {
+        id
+        token0 { id symbol name decimals }
+        token1 { id symbol name decimals }
         tickSpacing
         liquidity
         tick
@@ -157,13 +241,18 @@ export async function fetchPool(poolId: string): Promise<Pool | null> {
       }
     }
   `;
-
-  const data = await fetchGraphQL(query, { id: poolId });
-  return data.pool || null;
+  try {
+    const data = await fetchGraphQL(extendedQuery, { id: poolId });
+    return data.pool || null;
+  } catch (e: any) {
+    console.warn("Subgraph: extended pool field unsupported, fallback:", e?.message);
+    const data = await fetchGraphQL(minimalQuery, { id: poolId });
+    return data.pool || null;
+  }
 }
 
 export async function fetchPositions(owner: string, first: number = 100, skip: number = 0): Promise<Position[]> {
-  const query = `
+  const extendedQuery = `
     query GetPositions($owner: String!, $first: Int!, $skip: Int!) {
       positions(
         where: { owner: $owner }
@@ -174,15 +263,48 @@ export async function fetchPositions(owner: string, first: number = 100, skip: n
         id
         tokenId
         owner
-        transfers {
+        poolId
+        liquidity
+        tickLower
+        tickUpper
+        pool {
           id
+          tick
+          tickSpacing
+          sqrtPrice
+          feeTier
+          liquidity
+          token0 { id symbol decimals }
+          token1 { id symbol decimals }
         }
+        transfers { id }
       }
     }
   `;
-
-  const data = await fetchGraphQL(query, { owner: owner.toLowerCase(), first, skip });
-  return data.positions || [];
+  const minimalQuery = `
+    query GetPositions($owner: String!, $first: Int!, $skip: Int!) {
+      positions(
+        where: { owner: $owner }
+        first: $first
+        skip: $skip
+        orderDirection: desc
+      ) {
+        id
+        tokenId
+        owner
+        poolId
+        transfers { id }
+      }
+    }
+  `;
+  try {
+    const data = await fetchGraphQL(extendedQuery, { owner: owner.toLowerCase(), first, skip });
+    return data.positions || [];
+  } catch (e: any) {
+    console.warn("Subgraph: extended position fields unsupported, fallback:", e?.message);
+    const data = await fetchGraphQL(minimalQuery, { owner: owner.toLowerCase(), first, skip });
+    return data.positions || [];
+  }
 }
 
 export async function fetchModifyLiquidities(first: number = 100, skip: number = 0): Promise<ModifyLiquidity[]> {
@@ -285,6 +407,7 @@ export async function fetchPosition(positionId: string): Promise<Position | null
         id
         tokenId
         owner
+        poolId
         transfers {
           id
         }
@@ -335,4 +458,129 @@ export async function fetchTransactions(first: number = 100, skip: number = 0): 
 
   const data = await fetchGraphQL(query, { first, skip });
   return data.transactions || [];
+}
+
+export async function fetchGlobalStats(poolManagerAddress: string): Promise<GlobalStats | null> {
+  const extendedQuery = `
+    query GetGlobal($id: ID!) {
+      poolManager(id: $id) {
+        poolCount
+        txCount
+        totalVolumeUSD
+        totalVolumeETH
+      }
+    }
+  `;
+  const minimalQuery = `
+    query GetGlobal($id: ID!) {
+      poolManager(id: $id) {
+        poolCount
+        txCount
+      }
+    }
+  `;
+  try {
+    const data = await fetchGraphQL(extendedQuery, { id: poolManagerAddress });
+    return data.poolManager || null;
+  } catch (e: any) {
+    console.warn("Subgraph: extended global fields unsupported, fallback:", e?.message);
+    const data = await fetchGraphQL(minimalQuery, { id: poolManagerAddress });
+    return data.poolManager || null;
+  }
+}
+
+export async function fetchRecentSwaps(poolAddress: string, first: number = 20): Promise<Swap[]> {
+  const extendedQuery = `
+    query GetRecentSwaps($pool: String!, $first: Int!) {
+      swaps(
+        orderBy: timestamp
+        orderDirection: desc
+        where: { pool: $pool }
+        first: $first
+      ) {
+        id
+        sender
+        amount0
+        amount1
+        timestamp
+        transaction { id blockNumber }
+        pool {
+          id
+          token0 { id symbol name decimals }
+          token1 { id symbol name decimals }
+        }
+      }
+    }
+  `;
+  const minimalQuery = `
+    query GetRecentSwaps($pool: String!, $first: Int!) {
+      swaps(
+        orderBy: timestamp
+        orderDirection: desc
+        where: { pool: $pool }
+        first: $first
+      ) {
+        id
+        sender
+        amount0
+        amount1
+        pool {
+          id
+          token0 { id symbol }
+          token1 { id symbol }
+        }
+      }
+    }
+  `;
+  try {
+    const data = await fetchGraphQL(extendedQuery, { pool: poolAddress, first });
+    return data.swaps || [];
+  } catch (e: any) {
+    console.warn("Subgraph: extended swap fields unsupported, fallback:", e?.message);
+    const data = await fetchGraphQL(minimalQuery, { pool: poolAddress, first });
+    return data.swaps || [];
+  }
+}
+
+export async function fetchPoolDayDatas(poolId: string, first: number = 10, date_gt?: number): Promise<PoolDayData[]> {
+  const extendedQuery = `
+    query GetPoolDayDatas($pool: String!, $first: Int!, $date_gt: Int) {
+      poolDayDatas(
+        first: $first
+        orderBy: date
+        where: { pool: $pool, date_gt: $date_gt }
+      ) {
+        date
+        liquidity
+        sqrtPrice
+        token0Price
+        token1Price
+        volumeToken0
+        volumeToken1
+      }
+    }
+  `;
+  const minimalQuery = `
+    query GetPoolDayDatas($pool: String!, $first: Int!, $date_gt: Int) {
+      poolDayDatas(
+        first: $first
+        orderBy: date
+        where: { pool: $pool, date_gt: $date_gt }
+      ) {
+        date
+        liquidity
+        sqrtPrice
+        volumeToken0
+        volumeToken1
+      }
+    }
+  `;
+  try {
+    const data = await fetchGraphQL(extendedQuery, { pool: poolId, first, date_gt });
+    return data.poolDayDatas || [];
+  } catch (e: any) {
+    console.warn("Subgraph: extended poolDayDatas fields unsupported, fallback:", e?.message);
+    const data = await fetchGraphQL(minimalQuery, { pool: poolId, first, date_gt });
+    return data.poolDayDatas || [];
+  }
 }

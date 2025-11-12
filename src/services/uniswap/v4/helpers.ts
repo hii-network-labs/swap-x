@@ -61,25 +61,23 @@ export function sortTokens(tokenA: Token, tokenB: Token): [Token, Token] {
 }
 
 export function decodePositionInfo(infoValue: bigint): {
-  liquidity: bigint;
   tickLower: number;
   tickUpper: number;
+  hasSubscriber: boolean;
 } {
-  // Position info is packed in a uint256:
-  // liquidity (128 bits) | tickLower (24 bits) | tickUpper (24 bits)
-  const liquidity = infoValue & ((1n << 128n) - 1n);
-  const tickLower = Number((infoValue >> 128n) & ((1n << 24n) - 1n));
-  const tickUpper = Number((infoValue >> 152n) & ((1n << 24n) - 1n));
+  // v4 PositionInfo layout (LSB -> MSB):
+  // 8 bits hasSubscriber | 24 bits tickLower | 24 bits tickUpper | 200 bits poolId
+  // See PositionInfoLibrary docs: TICK_LOWER_OFFSET = 8, TICK_UPPER_OFFSET = 32
+  const rawUpper = Number((infoValue >> 32n) & 0xffffffn);
+  const rawLower = Number((infoValue >> 8n) & 0xffffffn);
 
-  // Convert unsigned to signed for ticks
-  const signedTickLower = tickLower > 0x7fffff ? tickLower - 0x1000000 : tickLower;
-  const signedTickUpper = tickUpper > 0x7fffff ? tickUpper - 0x1000000 : tickUpper;
+  // Convert to signed int24
+  const tickUpper = rawUpper >= 0x800000 ? rawUpper - 0x1000000 : rawUpper;
+  const tickLower = rawLower >= 0x800000 ? rawLower - 0x1000000 : rawLower;
 
-  return {
-    liquidity,
-    tickLower: signedTickLower,
-    tickUpper: signedTickUpper,
-  };
+  const hasSubscriber = (infoValue & 0xffn) !== 0n;
+
+  return { tickLower, tickUpper, hasSubscriber };
 }
 
 export function createCurrency(

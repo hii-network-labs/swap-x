@@ -43,16 +43,16 @@ export const SwapConfirmDialog = ({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-md">
         <AlertDialogHeader>
-          <AlertDialogTitle>Xác nhận giao dịch</AlertDialogTitle>
+          <AlertDialogTitle>Confirm swap</AlertDialogTitle>
           <AlertDialogDescription>
-            Vui lòng kiểm tra thông tin giao dịch trước khi xác nhận
+            Please review swap details before confirming
           </AlertDialogDescription>
         </AlertDialogHeader>
 
         <div className="space-y-4 py-4">
           {/* From Token */}
           <div className="bg-muted/50 rounded-xl p-4 space-y-2">
-            <span className="text-sm text-muted-foreground">Bạn trả</span>
+            <span className="text-sm text-muted-foreground">You pay</span>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <img src={fromToken.logo} alt={fromToken.symbol} className="w-8 h-8 rounded-full" />
@@ -76,7 +76,7 @@ export const SwapConfirmDialog = ({
 
           {/* To Token */}
           <div className="bg-muted/50 rounded-xl p-4 space-y-2">
-            <span className="text-sm text-muted-foreground">Bạn nhận</span>
+            <span className="text-sm text-muted-foreground">You receive</span>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <img src={toToken.logo} alt={toToken.symbol} className="w-8 h-8 rounded-full" />
@@ -94,7 +94,7 @@ export const SwapConfirmDialog = ({
           {/* Details */}
           <div className="space-y-2 border-t pt-4">
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Tỷ giá</span>
+              <span className="text-muted-foreground">Exchange rate</span>
               <span className="font-medium">
                 1 {fromToken.symbol} = {exchangeRate.toFixed(6)} {toToken.symbol}
               </span>
@@ -104,26 +104,26 @@ export const SwapConfirmDialog = ({
               <span className="font-medium">{slippage}%</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Số lượng tối thiểu</span>
+              <span className="text-muted-foreground">Minimum received</span>
               <span className="font-medium">
                 {minReceived.toFixed(6)} {toToken.symbol}
               </span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Phí giao dịch</span>
+              <span className="text-muted-foreground">Transaction fee</span>
               <span className="font-medium text-muted-foreground">~$0.00 (Demo)</span>
             </div>
           </div>
 
           <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-sm text-amber-600 dark:text-amber-400">
-            ⚠️ Đầu ra sẽ được gửi đến ví của bạn sau khi giao dịch hoàn tất
+            ⚠️ Output will be sent to your wallet after the swap completes
           </div>
         </div>
 
         <AlertDialogFooter>
-          <AlertDialogCancel>Hủy</AlertDialogCancel>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction onClick={onConfirm} className="bg-gradient-primary">
-            Xác nhận hoán đổi
+            Confirm Swap
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

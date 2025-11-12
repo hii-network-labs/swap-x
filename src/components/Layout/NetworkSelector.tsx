@@ -30,7 +30,7 @@ export const NetworkSelector = () => {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56 bg-card border-glass">
-        <DropdownMenuLabel>Chọn mạng</DropdownMenuLabel>
+        <DropdownMenuLabel>Select network</DropdownMenuLabel>
         <DropdownMenuSeparator className="bg-glass" />
         
         <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
