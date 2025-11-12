@@ -29,11 +29,12 @@ const History = () => {
   };
 
   // Subgraph amounts (amount0/amount1) are already normalized to token units
-  // Do not divide by 10^decimals; just format to fixed precision
-  const formatAmount = (amount: string) => {
+  // Show explicit sign: '+' for positive, '-' for negative; 6 decimals
+  const formatSignedAmount = (amount: string) => {
     const value = parseFloat(amount);
     if (Number.isNaN(value)) return "-";
-    return value.toFixed(6);
+    const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+    return `${sign}${Math.abs(value).toFixed(6)}`;
   };
 
   if (isLoading) {
@@ -141,12 +142,12 @@ const History = () => {
                             <div className="flex items-center gap-2">
                               <div className="text-sm">
                                 <div className="flex items-center gap-1">
-                                  <span className="font-medium">{formatAmount(swap.amount0)}</span>
+                                  <span className={`font-medium ${parseFloat(swap.amount0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatSignedAmount(swap.amount0)}</span>
                                   <span className="text-muted-foreground">{swap.pool.token0.symbol}</span>
                                 </div>
-                                <div className="flex items-center gap-1 text-muted-foreground">
-                                  <span className="font-medium">{formatAmount(swap.amount1)}</span>
-                                  <span>{swap.pool.token1.symbol}</span>
+                                <div className="flex items-center gap-1">
+                                  <span className={`font-medium ${parseFloat(swap.amount1) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatSignedAmount(swap.amount1)}</span>
+                                  <span className="text-muted-foreground">{swap.pool.token1.symbol}</span>
                                 </div>
                               </div>
                             </div>
