@@ -23,6 +23,31 @@ export const UNISWAP_V4_ADDRESSES: Record<
 
 // Helper to get V4 addresses
 export const getUniswapV4Addresses = (chainId: number) => {
+  // Prefer env-driven addresses for the configured default chain
+  const envChainIdRaw = import.meta.env.VITE_DEFAULT_CHAIN_ID as string | number | undefined;
+  const envChainId = envChainIdRaw !== undefined ? Number(envChainIdRaw) : undefined;
+  const poolManager = import.meta.env.VITE_V4_POOL_MANAGER as string | undefined;
+  const positionManager = import.meta.env.VITE_V4_POSITION_MANAGER as string | undefined;
+  const stateView = import.meta.env.VITE_V4_STATE_VIEW as string | undefined;
+  const permit2 = import.meta.env.VITE_V4_PERMIT2 as string | undefined;
+  const quoter = import.meta.env.VITE_V4_QUOTER as string | undefined;
+  const universalRouter = import.meta.env.VITE_V4_UNIVERSAL_ROUTER as string | undefined;
+
+  if (
+    envChainId !== undefined &&
+    chainId === envChainId &&
+    poolManager && positionManager && stateView && permit2
+  ) {
+    return {
+      poolManager,
+      positionManager,
+      stateView,
+      permit2,
+      quoter,
+      universalRouter,
+    } as const;
+  }
+
   return UNISWAP_V4_ADDRESSES[chainId];
 };
 

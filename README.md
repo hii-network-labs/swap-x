@@ -71,3 +71,36 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## Deploy to Vercel
+
+This project is a Vite + React SPA and works great on Vercel.
+
+- Prerequisites: Node.js 18+, Vercel account and CLI (optional).
+- Build command: `npm run build`
+- Output directory: `dist`
+
+### Configure Environment Variables
+
+Add the following keys in Vercel Project Settings → Environment Variables (or in a local `.env` file). All keys must start with `VITE_` to be available in the client bundle.
+
+- `VITE_DEFAULT_CHAIN_ID` — chain id (e.g. `22469`)
+- `VITE_DEFAULT_CHAIN_NAME` — chain name (e.g. `HII Testnet`)
+- `VITE_DEFAULT_CHAIN_RPC_URL` — RPC URL (e.g. `https://rpc-sb.teknix.dev`)
+- `VITE_DEFAULT_CHAIN_EXPLORER` — explorer tx base (optional)
+- `VITE_SUBGRAPH_URL` — GraphQL subgraph endpoint
+- `VITE_V4_POOL_MANAGER` — Uniswap V4 PoolManager
+- `VITE_V4_POSITION_MANAGER` — Uniswap V4 PositionManager
+- `VITE_V4_STATE_VIEW` — Uniswap V4 StateView
+- `VITE_V4_PERMIT2` — Permit2 address
+- `VITE_V4_QUOTER` — V4 Quoter (optional)
+- `VITE_V4_UNIVERSAL_ROUTER` — Universal Router (optional)
+
+You can copy `.env.example` to create your own `.env.development` and `.env.production`.
+
+### Deploy Steps
+
+1. Push code to GitHub.
+2. Import the repo in Vercel.
+3. Add environment variables as above (Production/Preview/Development scopes as needed).
+4. Vercel auto-detects Vite and will build and deploy.

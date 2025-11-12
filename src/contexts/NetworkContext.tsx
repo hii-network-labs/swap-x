@@ -11,9 +11,9 @@ export interface Network {
 export const NETWORKS: Network[] = [
   {
     id: "hii-testnet",
-    name: "HII Testnet",
-    chainId: 22469,
-    rpcUrl: "https://rpc-sb.teknix.dev",
+    name: (import.meta.env.VITE_DEFAULT_CHAIN_NAME as string | undefined) || "HII Testnet",
+    chainId: Number((import.meta.env.VITE_DEFAULT_CHAIN_ID as string | number | undefined) ?? 22469),
+    rpcUrl: (import.meta.env.VITE_DEFAULT_CHAIN_RPC_URL as string | undefined) || "https://rpc-sb.teknix.dev",
     isTestnet: true,
   },
   {
@@ -98,7 +98,7 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
                       decimals: 18,
                     },
                     rpcUrls: ["https://rpc-sb.teknix.dev"],
-                    blockExplorerUrls: ["https://testnet-explorer.hii.network"],
+                    blockExplorerUrls: ["https://explorer-sb.teknix.dev"],
                   },
                 ],
               });

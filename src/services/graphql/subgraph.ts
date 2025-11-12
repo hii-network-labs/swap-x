@@ -1,4 +1,7 @@
-const SUBGRAPH_URL = "https://graph-node.sb.teknix.dev/subgraphs/name/subgraph-swap-hii-5";
+// Load subgraph endpoint from env with safe fallback
+const SUBGRAPH_URL = (
+  import.meta.env.VITE_SUBGRAPH_URL as string | undefined
+) || "https://graph-node.sb.teknix.dev/subgraphs/name/subgraph-swap-hii-5";
 
 export interface Pool {
   id: string;
