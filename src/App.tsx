@@ -9,6 +9,7 @@ import Swap from "./pages/Swap";
 import Pools from "./pages/Pools";
 import History from "./pages/History";
 import NotFound from "./pages/NotFound";
+import GlobalLoadingBar from "@/components/ui/GlobalLoadingBar";
 
 const queryClient = new QueryClient();
 
@@ -16,6 +17,7 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <NetworkProvider>
+        <GlobalLoadingBar />
         <Toaster />
         <Sonner />
         <BrowserRouter>

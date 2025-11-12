@@ -26,8 +26,9 @@ export const SlippageSettings = ({ slippage, onSlippageChange }: SlippageSetting
   };
 
   const handleCustomChange = (value: string) => {
-    setCustomValue(value);
-    const numValue = parseFloat(value);
+    const normalized = value.replace(/,/g, ".");
+    setCustomValue(normalized);
+    const numValue = parseFloat(normalized);
     if (!isNaN(numValue) && numValue > 0 && numValue <= 50) {
       setIsCustom(true);
       onSlippageChange(numValue);
@@ -75,6 +76,7 @@ export const SlippageSettings = ({ slippage, onSlippageChange }: SlippageSetting
                 min="0"
                 max="50"
                 step="0.1"
+                inputMode="decimal"
               />
               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
                 %

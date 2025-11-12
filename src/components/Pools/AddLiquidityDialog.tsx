@@ -74,6 +74,18 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
   const isSupported = isV4SupportedNetwork(currentNetwork.chainId);
   const tickSpacing = TICK_SPACINGS[fee];
 
+  // Chuẩn hóa chuỗi số thập phân: thay ',' bằng '.', loại bỏ ký tự không hợp lệ
+  const sanitizeDecimalInput = (value: string) => {
+    if (!value) return "";
+    let v = value.replace(/,/g, ".");
+    v = v.replace(/[^\d.]/g, "");
+    const parts = v.split(".");
+    if (parts.length > 2) {
+      v = parts[0] + "." + parts.slice(1).join("");
+    }
+    return v;
+  };
+
   // Prefill when dialog opens or presets change
   useEffect(() => {
     if (!open) return;
@@ -583,19 +595,14 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
           )}
 
           <div className="space-y-2">
-            <Label htmlFor="token0">Token 0 Address</Label>
+            <Label htmlFor="token0">{token0Meta?.name || token0Meta?.symbol || "Token 0"}</Label>
             <div className="relative">
-              {token0Meta && (
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
-                  {token0Meta.symbol} — {token0Meta.name}
-                </span>
-              )}
               <Input
                 id="token0"
                 placeholder="0x..."
                 value={token0Address}
                 onChange={(e) => setToken0Address(e.target.value)}
-                className={token0Meta ? "pl-36 pr-10" : "pr-10"}
+                className="pr-10"
               />
               <Popover open={openPicker0} onOpenChange={setOpenPicker0}>
                 <PopoverTrigger asChild>
@@ -626,41 +633,34 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
                 </PopoverContent>
               </Popover>
             </div>
-            {token0Meta && (
-              <div className="text-xs text-muted-foreground">
-                {token0Meta.name} • {token0Meta.symbol} • decimals {token0Meta.decimals}
-              </div>
-            )}
+            {/* No need to repeat token name next to address; label already shows it */}
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="amount0">Token 0 Amount</Label>
+            <Label htmlFor="amount0">{token0Meta?.symbol || token0Meta?.name ? `${token0Meta?.symbol || token0Meta?.name} Amount` : "Token 0 Amount"}</Label>
             <Input
               id="amount0"
               type="number"
               placeholder="1.0"
-            value={amount0}
+              value={amount0}
               onChange={(e) => {
                 setLastEdited("amount0");
-                setAmount0(e.target.value);
+                setAmount0(sanitizeDecimalInput(e.target.value));
               }}
+              inputMode="decimal"
+              step="any"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="token1">Token 1 Address</Label>
+            <Label htmlFor="token1">{token1Meta?.name || token1Meta?.symbol || "Token 1"}</Label>
             <div className="relative">
-              {token1Meta && (
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
-                  {token1Meta.symbol} — {token1Meta.name}
-                </span>
-              )}
               <Input
                 id="token1"
                 placeholder="0x..."
                 value={token1Address}
                 onChange={(e) => setToken1Address(e.target.value)}
-                className={token1Meta ? "pl-36 pr-10" : "pr-10"}
+                className="pr-10"
               />
               <Popover open={openPicker1} onOpenChange={setOpenPicker1}>
                 <PopoverTrigger asChild>
@@ -691,24 +691,22 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
                 </PopoverContent>
               </Popover>
             </div>
-            {token1Meta && (
-              <div className="text-xs text-muted-foreground">
-                {token1Meta.name} • {token1Meta.symbol} • decimals {token1Meta.decimals}
-              </div>
-            )}
+            {/* No need to repeat token name next to address; label already shows it */}
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="amount1">Token 1 Amount</Label>
+            <Label htmlFor="amount1">{token1Meta?.symbol || token1Meta?.name ? `${token1Meta?.symbol || token1Meta?.name} Amount` : "Token 1 Amount"}</Label>
             <Input
               id="amount1"
               type="number"
               placeholder="1000.0"
-            value={amount1}
+              value={amount1}
               onChange={(e) => {
                 setLastEdited("amount1");
-                setAmount1(e.target.value);
+                setAmount1(sanitizeDecimalInput(e.target.value));
               }}
+              inputMode="decimal"
+              step="any"
             />
           </div>
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useContext, useState, ReactNode, useEffect } from "react";
 
 export interface Network {
   id: string;
@@ -65,10 +65,25 @@ const NetworkContext = createContext<NetworkContextType | undefined>(undefined);
 export const NetworkProvider = ({ children }: { children: ReactNode }) => {
   const [currentNetwork, setCurrentNetwork] = useState<Network>(NETWORKS[0]);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const SESSION_KEY = "wallet_session";
+  const SESSION_TTL_MS = Number((import.meta.env.VITE_WALLET_SESSION_TTL_MS as string | undefined) ?? 600_000); // default 10 minutes
 
   // Auto-switch to chain 22469 when wallet connects
   const handleSetWalletAddress = async (address: string | null) => {
     setWalletAddress(address);
+
+    // Persist session with timestamp for TTL-based reconnect on refresh
+    try {
+      if (address) {
+        const payload = { address, timestamp: Date.now() };
+        localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+      } else {
+        // Do not immediately clear persisted session on transient disconnects
+        // The TTL will expire naturally; keep session to allow soft refresh reconnects
+      }
+    } catch (e) {
+      // ignore storage errors
+    }
 
     if (address && window.ethereum) {
       try {
@@ -113,6 +128,28 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
       }
     }
   };
+
+  // Restore wallet session on mount if within TTL
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { address: string; timestamp: number } | null;
+      if (parsed?.address && parsed?.timestamp && Number.isFinite(parsed.timestamp)) {
+        const age = Date.now() - parsed.timestamp;
+        if (age < SESSION_TTL_MS) {
+          // Soft restore: set address to keep UI connected; MetaMask usually retains permissions across reloads
+          handleSetWalletAddress(parsed.address);
+        } else {
+          // Expired session: clean up
+          localStorage.removeItem(SESSION_KEY);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <NetworkContext.Provider

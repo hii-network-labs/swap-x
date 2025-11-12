@@ -173,7 +173,7 @@ export function RemoveLiquidityDialog({ open, onOpenChange, tokenId, tokenPairLa
                     step={1}
                     value={Number.isFinite(percentage) ? percentage : 0}
                     onChange={(e) => {
-                      const raw = e.target.value;
+                      const raw = e.target.value.replace(/,/g, ".");
                       const num = parseInt(raw, 10);
                       if (isNaN(num)) {
                         setPercentage(0);
@@ -183,6 +183,7 @@ export function RemoveLiquidityDialog({ open, onOpenChange, tokenId, tokenPairLa
                       setPercentage(clamped);
                     }}
                     placeholder="e.g., 50"
+                    inputMode="numeric"
                   />
                 </div>
                 <span className="text-sm text-muted-foreground">%</span>
