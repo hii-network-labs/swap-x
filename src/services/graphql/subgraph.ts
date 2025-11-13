@@ -28,6 +28,9 @@ export interface Pool {
   volumeUSD?: string;
   feesUSD?: string;
   totalValueLockedUSD?: string;
+  // Prefer computing TVL(USD) from actual token balances in pool
+  totalValueLockedToken0?: string;
+  totalValueLockedToken1?: string;
   txCount: string;
 }
 
@@ -36,19 +39,6 @@ export interface Position {
   tokenId: string;
   owner: string;
   poolId?: string;
-  liquidity?: string;
-  tickLower?: string;
-  tickUpper?: string;
-  pool?: {
-    id: string;
-    tick: string;
-    tickSpacing: string;
-    token0: { id: string; symbol: string; decimals: string };
-    token1: { id: string; symbol: string; decimals: string };
-    feeTier?: string;
-    sqrtPrice?: string;
-    liquidity?: string;
-  };
   transfers: Array<{
     id: string;
   }>;
@@ -173,6 +163,8 @@ export async function fetchPools(first: number = 100, skip: number = 0): Promise
         volumeUSD
         feesUSD
         totalValueLockedUSD
+        totalValueLockedToken0
+        totalValueLockedToken1
         txCount
       }
     }
@@ -225,6 +217,8 @@ export async function fetchPool(poolId: string): Promise<Pool | null> {
         volumeUSD
         feesUSD
         totalValueLockedUSD
+        totalValueLockedToken0
+        totalValueLockedToken1
         txCount
       }
     }
@@ -267,19 +261,6 @@ export async function fetchPositions(owner: string, first: number = 100, skip: n
         tokenId
         owner
         poolId
-        liquidity
-        tickLower
-        tickUpper
-        pool {
-          id
-          tick
-          tickSpacing
-          sqrtPrice
-          feeTier
-          liquidity
-          token0 { id symbol decimals }
-          token1 { id symbol decimals }
-        }
         transfers { id }
       }
     }

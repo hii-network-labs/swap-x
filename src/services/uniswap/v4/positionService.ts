@@ -1,4 +1,4 @@
-import { Address } from "viem";
+import { Address, decodeAbiParameters, encodeFunctionData } from "viem";
 import { Token, Percent, Ether, CurrencyAmount } from "@uniswap/sdk-core";
 import { nearestUsableTick, TickMath } from "@uniswap/v3-sdk";
 import { Position, MintOptions, V4PositionManager, PermitDetails } from "@uniswap/v4-sdk";
@@ -15,6 +15,12 @@ import { ZERO_ADDRESS, isNativeETH, fetchTokenInfo, decodePositionInfo } from ".
 import { Pool } from "@uniswap/v4-sdk";
 
 const AMOUNT_MAX = 2n ** 256n - 1n;
+const MAX_UINT128 = 2n ** 128n - 1n;
+
+// In-memory caches for frequently accessed position data
+const DETAILS_CACHE = new Map<string, { value: V4PositionDetails; ts: number }>();
+const FEES_CACHE = new Map<string, { value: { token0: { symbol: string; address: Address; amount: string }; token1: { symbol: string; address: Address; amount: string } }; ts: number }>();
+const CACHE_TTL_MS = 30_000; // 30 seconds
 
 export function calculateLiquidityToRemove(
   currentLiquidity: bigint,
@@ -533,6 +539,11 @@ export async function getPositionDetails(
   chainId: number,
   tokenId: bigint
 ): Promise<V4PositionDetails | null> {
+  const cacheKey = `${chainId}-${tokenId.toString()}`;
+  const cached = DETAILS_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return cached.value;
+  }
   try {
     const addresses = getUniswapV4Addresses(chainId);
     if (!addresses) {
@@ -610,6 +621,7 @@ export async function getPositionDetails(
       lpFee,
     });
 
+    DETAILS_CACHE.set(cacheKey, { value: result, ts: Date.now() });
     return result;
   } catch (error) {
     console.error("❌ Error in getPositionDetails:", error);
@@ -728,4 +740,165 @@ export async function estimatePositionAmounts(
   if (!res) return null;
   const { token0, token1, inRange, oneSided } = res;
   return { token0, token1, inRange, oneSided };
+}
+
+/**
+ * Estimate unclaimed fees via static call simulation of collect.
+ * Uses PositionManager.multicall with collect calldata and decodes returned amounts.
+ */
+export async function estimateUnclaimedFees(
+  client: any,
+  chainId: number,
+  tokenId: bigint,
+  account?: Address
+): Promise<{
+  token0: { symbol: string; address: Address; amount: string };
+  token1: { symbol: string; address: Address; amount: string };
+} | null> {
+  const cacheKey = `${chainId}-${tokenId.toString()}`;
+  const cached = FEES_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return cached.value;
+  }
+  try {
+    const addresses = getUniswapV4Addresses(chainId);
+    if (!addresses) throw new Error(`V4 not supported on chain ${chainId}`);
+
+    console.groupCollapsed("🔎 estimateUnclaimedFees/start");
+    console.debug("chainId:", chainId, "tokenId:", tokenId.toString());
+    console.debug("using off-chain StateView computation; no owner/approve required");
+
+    const details = await getPositionDetails(client, chainId, tokenId);
+    if (!details) return null;
+
+    // Build tokens for decimals/symbol and compute poolId
+    const [token0Info, token1Info] = await Promise.all([
+      fetchTokenInfo(client, details.token0.address),
+      fetchTokenInfo(client, details.token1.address),
+    ]);
+
+    const token0 = new Token(chainId, details.token0.address, token0Info.decimals, token0Info.symbol, token0Info.name);
+    const token1 = new Token(chainId, details.token1.address, token1Info.decimals, token1Info.symbol, token1Info.name);
+
+    const poolId = Pool.getPoolId(token0, token1, details.poolKey.fee, details.poolKey.tickSpacing, details.poolKey.hooks) as `0x${string}`;
+
+    // Derive salt from tokenId and set owner to PositionManager per Uniswap v4
+    const salt = (`0x${tokenId.toString(16).padStart(64, "0")}`) as `0x${string}`;
+    const owner = addresses.positionManager as Address;
+
+    // Read last fee growth from StateView (position info)
+    let feeGrowthInside0LastX128: bigint = 0n;
+    let feeGrowthInside1LastX128: bigint = 0n;
+    try {
+      const posInfo = (await client.readContract({
+        address: addresses.stateView as Address,
+        abi: STATE_VIEW_ABI,
+        functionName: "getPositionInfo",
+        args: [poolId, owner, details.tickLower, details.tickUpper, salt],
+      })) as [bigint, bigint, bigint];
+      feeGrowthInside0LastX128 = posInfo[1];
+      feeGrowthInside1LastX128 = posInfo[2];
+      console.debug("position last fee growth:", {
+        feeGrowthInside0LastX128: feeGrowthInside0LastX128.toString(),
+        feeGrowthInside1LastX128: feeGrowthInside1LastX128.toString(),
+      });
+    } catch (e: any) {
+      console.warn("estimateUnclaimedFees: getPositionInfo failed; defaulting last growth to 0", e?.message);
+    }
+
+    // Read current fee growth inside bounds
+    const [feeGrowthInside0X128, feeGrowthInside1X128] = (await client.readContract({
+      address: addresses.stateView as Address,
+      abi: STATE_VIEW_ABI,
+      functionName: "getFeeGrowthInside",
+      args: [poolId, details.tickLower, details.tickUpper],
+    })) as [bigint, bigint];
+
+    // Compute unclaimed amounts = (current - last) * liquidity / Q128
+    const Q128 = 2n ** 128n;
+    const delta0 = feeGrowthInside0X128 >= feeGrowthInside0LastX128 ? (feeGrowthInside0X128 - feeGrowthInside0LastX128) : 0n;
+    const delta1 = feeGrowthInside1X128 >= feeGrowthInside1LastX128 ? (feeGrowthInside1X128 - feeGrowthInside1LastX128) : 0n;
+    const raw0 = (delta0 * details.liquidity) / Q128;
+    const raw1 = (delta1 * details.liquidity) / Q128;
+    console.debug("computed raw fees:", { raw0: raw0.toString(), raw1: raw1.toString() });
+
+    // Format to significant strings using decimals
+    const amt0 = CurrencyAmount.fromRawAmount(token0, raw0.toString()).toSignificant(6);
+    const amt1 = CurrencyAmount.fromRawAmount(token1, raw1.toString()).toSignificant(6);
+
+    const result = {
+      token0: { symbol: token0.symbol ?? token0Info.symbol, address: details.token0.address, amount: amt0 },
+      token1: { symbol: token1.symbol ?? token1Info.symbol, address: details.token1.address, amount: amt1 },
+    };
+    console.debug("estimateUnclaimedFees: computed amounts", {
+      tokenId: tokenId.toString(),
+      token0: result.token0.amount,
+      token1: result.token1.amount,
+    });
+    FEES_CACHE.set(cacheKey, { value: result, ts: Date.now() });
+    console.groupEnd();
+    return result;
+  } catch (error) {
+    console.warn("estimateUnclaimedFees: computation failed", error);
+    console.groupEnd();
+    return null;
+  }
+}
+
+/**
+ * Claim fees from a V4 position via PositionManager.multicall collect
+ */
+export async function collectFeesFromPosition(
+  client: any,
+  walletClient: any,
+  chainId: number,
+  account: Address,
+  tokenId: bigint,
+  recipient?: Address
+) {
+  try {
+    const addresses = getUniswapV4Addresses(chainId);
+    if (!addresses) throw new Error(`V4 not supported on chain ${chainId}`);
+
+    let collectCalldata: string | undefined;
+    const params: any = {
+      tokenId: tokenId,
+      recipient: (recipient ?? account) as Address,
+      amount0Max: MAX_UINT128,
+      amount1Max: MAX_UINT128,
+    };
+    try {
+      // @ts-ignore
+      if (typeof V4PositionManager.collectCallParameters === "function") {
+        // @ts-ignore
+        const { calldata } = V4PositionManager.collectCallParameters(params);
+        collectCalldata = calldata as string;
+      } else {
+        collectCalldata = encodeFunctionData({
+          abi: POSITION_MANAGER_ABI as any,
+          functionName: "collect",
+          args: [params],
+        });
+      }
+    } catch (e) {
+      console.error("collectFeesFromPosition: building collect calldata failed", e);
+      throw e;
+    }
+
+    const txHash = await walletClient.writeContract({
+      account,
+      address: addresses.positionManager as Address,
+      abi: POSITION_MANAGER_ABI,
+      functionName: "multicall",
+      args: [[collectCalldata as `0x${string}`]],
+      value: 0n,
+    });
+
+    const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+    console.debug("✅ Collect fees success:", txHash);
+    return { txHash, receipt };
+  } catch (error) {
+    console.error("❌ Error in collectFeesFromPosition:", error);
+    throw error;
+  }
 }

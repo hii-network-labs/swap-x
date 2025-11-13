@@ -9,9 +9,11 @@ import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { fetchPool, Pool } from "@/services/graphql/subgraph";
 import { useV4Provider } from "@/hooks/useV4Provider";
-import { getPositionDetails, V4PositionDetails, estimatePositionAmounts } from "@/services/uniswap/v4/positionService";
+import { getPositionDetails, V4PositionDetails, estimatePositionAmounts, estimateUnclaimedFees, collectFeesFromPosition } from "@/services/uniswap/v4/positionService";
 import { RemoveLiquidityDialog } from "@/components/Pools/RemoveLiquidityDialog";
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 
 const MyPositions = () => {
   const [removeOpen, setRemoveOpen] = useState(false);
@@ -19,8 +21,56 @@ const MyPositions = () => {
   const [removeLabel, setRemoveLabel] = useState<string | undefined>(undefined);
   const { walletAddress } = useNetwork();
   const { positions, isLoading, error } = useSubgraphPositions();
-  const { publicClient, chain } = useV4Provider();
+  const { publicClient, walletClient, chain } = useV4Provider();
+  const queryClient = useQueryClient();
 
+  // --- USD helpers with $1/token assumption and APR approximation ---
+  const getTokenUSDPrice = (_tokenAddress?: string, _symbol?: string) => 1;
+  const formatUSD = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
+  const computeVolumeUSD = (pool: any) => {
+    if (!pool) return 0;
+    if (pool.volumeUSD != null) {
+      const v = parseFloat(pool.volumeUSD);
+      if (!Number.isNaN(v) && v > 0) return v;
+    }
+    const vol0 = parseFloat(pool.volumeToken0 || "0");
+    const vol1 = parseFloat(pool.volumeToken1 || "0");
+    const p0 = getTokenUSDPrice(pool.token0?.id, pool.token0?.symbol);
+    const p1 = getTokenUSDPrice(pool.token1?.id, pool.token1?.symbol);
+    return vol0 * p0 + vol1 * p1;
+  };
+  // Compute TVL(USD) from actual token balances; avoid using raw liquidity.
+  const computeLiquidityUSD = (pool: any) => {
+    if (!pool) return 0;
+    if (pool.totalValueLockedUSD != null) {
+      const v = parseFloat(pool.totalValueLockedUSD);
+      if (!Number.isNaN(v) && v > 0) return v;
+    }
+    const tvl0 = parseFloat(pool.totalValueLockedToken0 || "0");
+    const tvl1 = parseFloat(pool.totalValueLockedToken1 || "0");
+    const p0 = getTokenUSDPrice(pool.token0?.id, pool.token0?.symbol);
+    const p1 = getTokenUSDPrice(pool.token1?.id, pool.token1?.symbol);
+    const est = tvl0 * p0 + tvl1 * p1;
+    if (est > 0) return est;
+    return 0;
+  };
+  const calculateAPR = (pool: any) => {
+    if (!pool) return "N/A";
+    const volUSD = computeVolumeUSD(pool);
+    const tvlUSD = computeLiquidityUSD(pool);
+    const feeFraction = pool.feeTier != null
+      ? Number(pool.feeTier) / 1_000_000
+      : (() => {
+          const spacing = parseInt(pool.tickSpacing || "10");
+          return spacing === 1 ? 0.0001 : spacing === 10 ? 0.0005 : spacing === 60 ? 0.003 : 0.01;
+        })();
+    if (!tvlUSD || tvlUSD <= 0) return "N/A"; // không có thanh khoản
+    const aprRaw = (volUSD * feeFraction * 365) / tvlUSD * 100;
+    if (!Number.isFinite(aprRaw)) return "N/A";
+    // TVL > 0 nhưng volume ~ 0 -> APR hợp lý là 0%
+    if (volUSD <= 0 || aprRaw <= 0) return "0.00%";
+    return `${aprRaw.toFixed(2)}%`;
+  };
   // Fetch pool info for positions (token0/token1/fee, etc.) via poolId
   const tokenIds = positions.map(p => BigInt(p.tokenId)).filter(Boolean);
   const tokenIdKeys = tokenIds.map((id) => id.toString());
@@ -113,9 +163,60 @@ const MyPositions = () => {
     staleTime: 30000,
   });
 
-  // Price helpers: placeholder USD pricing ($1 per token). Replace when price feed is available
-  const getTokenUSDPrice = (_tokenAddress?: string, _symbol?: string) => 1;
-  const formatUSD = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
+  // Estimate unclaimed fees per position via collect simulation
+  const { data: feesMap, isLoading: feesLoading } = useQuery<Record<string, {
+    token0: { symbol: string; amount: string };
+    token1: { symbol: string; amount: string };
+  }>>({
+    queryKey: ["v4-position-fees", chain?.id, tokenIdKeys],
+    queryFn: async () => {
+      if (!publicClient || !chain) return {};
+      const entries = await Promise.all(
+        tokenIds.map(async (id) => {
+          const res = await estimateUnclaimedFees(publicClient, chain.id, id, walletAddress as `0x${string}`);
+          if (!res) return null;
+          return [id.toString(), {
+            token0: { symbol: res.token0.symbol, amount: res.token0.amount },
+            token1: { symbol: res.token1.symbol, amount: res.token1.amount },
+          }] as const;
+        })
+      );
+      const map: Record<string, { token0: { symbol: string; amount: string }; token1: { symbol: string; amount: string } }> = {};
+      for (const e of entries) {
+        if (e) map[e[0]] = e[1];
+      }
+      return map;
+    },
+    enabled: Boolean(publicClient && chain && tokenIds.length > 0),
+    staleTime: 30000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  // Mutation: Claim fees for a position
+  const { toast } = useToast();
+  const claimMutation = useMutation({
+    mutationFn: async (vars: { tokenId: bigint }) => {
+      if (!publicClient || !chain) throw new Error("Provider not ready");
+      if (!walletAddress) throw new Error("Wallet not connected");
+      if (!walletClient) throw new Error("Wallet client unavailable");
+      return collectFeesFromPosition(publicClient, walletClient, chain.id, walletAddress as `0x${string}`, vars.tokenId);
+    },
+    onSuccess: async (res) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees", chain?.id, tokenIdKeys] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts", chain?.id, tokenIdKeys] }),
+      ]);
+      toast({ title: "Claimed fees", description: `Tx: ${res?.txHash ?? "sent"}` });
+    },
+    onError: (err: any) => {
+      const msg = err?.shortMessage || err?.message || "Failed to claim fees";
+      toast({ title: "Claim failed", description: msg, variant: "destructive" });
+      console.error("Claim fees error:", err);
+    },
+  });
+
+  // Price helpers above
 
   if (!walletAddress) {
     return (
@@ -139,9 +240,7 @@ const MyPositions = () => {
         <Card className="p-8 bg-card/80 backdrop-blur-xl border-glass text-center max-w-md">
           <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
           <h2 className="text-2xl font-bold mb-2">Loading Positions</h2>
-          <p className="text-muted-foreground">
-            Fetching your positions from the blockchain...
-          </p>
+          <p className="text-muted-foreground">Please wait while we load your positions.</p>
         </Card>
       </div>
     );
@@ -165,9 +264,7 @@ const MyPositions = () => {
         {error && (
           <Alert className="mb-8 border-red-500/50 bg-red-500/10">
             <AlertCircle className="h-4 w-4 text-red-400" />
-            <AlertDescription className="text-red-400">
-              {error}
-            </AlertDescription>
+            <AlertDescription className="text-red-400">Unable to load positions. Please try again.</AlertDescription>
           </Alert>
         )}
 
@@ -212,7 +309,7 @@ const MyPositions = () => {
                 ? `~ ${formatUSD(usdTotal)} (${amt0.toFixed(6)} ${amountInfo.token0.symbol} / ${amt1.toFixed(6)} ${amountInfo.token1.symbol})`
                 : "-";
               const feesEarned = "-"; // TODO: integrate subgraph earnings
-              const apr = "-";
+              const apr = fallbackPool ? calculateAPR(fallbackPool) : "N/A";
               const priceRange = details ? "Custom range" : "";
               const toPrice = (tick: number) => Number(Math.pow(1.0001, tick)).toFixed(4);
               const minPrice = details ? toPrice(details.tickLower) : "";
@@ -277,20 +374,43 @@ const MyPositions = () => {
                     </div>
 
                     {/* Bottom Stats Grid */}
-                    <div className="grid grid-cols-5 gap-6 pt-4 border-t border-glass">
+                      <div className="grid grid-cols-5 gap-6 pt-4 border-t border-glass">
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">Position</div>
-                        <div className="text-lg font-semibold">{positionValue}</div>
+                        <div className="text-sm">{positionValue}</div>
                       </div>
                       
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">Fees</div>
-                        <div className="text-lg font-semibold">{feesEarned}</div>
+                        <div className="text-sm">
+                          {feesLoading ? (
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Estimating...
+                            </div>
+                          ) : feesMap?.[position.tokenId] ? (
+                            (() => {
+                              const feesInfo = feesMap[position.tokenId];
+                              const f0 = parseFloat(feesInfo.token0.amount) || 0;
+                              const f1 = parseFloat(feesInfo.token1.amount) || 0;
+                              const p0 = getTokenUSDPrice(details?.token0.address, feesInfo.token0.symbol);
+                              const p1 = getTokenUSDPrice(details?.token1.address, feesInfo.token1.symbol);
+                              const usd = (f0 * p0) + (f1 * p1);
+                              return (
+                                <div className="text-sm">
+                                  ~ {formatUSD(usd)} ({f0.toFixed(6)} {feesInfo.token0.symbol} / {f1.toFixed(6)} {feesInfo.token1.symbol})
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            <div className="text-muted-foreground">-</div>
+                          )}
+                        </div>
                       </div>
                       
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">APR</div>
-                        <div className="text-lg font-semibold">{apr}</div>
+                        <div className="text-sm">{apr}</div>
                       </div>
                       
                       <div>
@@ -307,7 +427,27 @@ const MyPositions = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-end justify-end">
+                      <div className="flex items-end justify-end gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => claimMutation.mutate({ tokenId: BigInt(position.tokenId) })}
+                          disabled={(() => {
+                            if (!walletAddress || claimMutation.isPending) return true;
+                            const feesInfo = feesMap?.[position.tokenId];
+                            // Cho phép claim nếu không có ước lượng (feesInfo undefined)
+                            if (!feesInfo) return false;
+                            const f0 = parseFloat(feesInfo.token0.amount) || 0;
+                            const f1 = parseFloat(feesInfo.token1.amount) || 0;
+                            return (f0 === 0 && f1 === 0);
+                          })()}
+                          className="min-w-[120px]"
+                        >
+                          {claimMutation.isPending ? (
+                            <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Claiming</span>
+                          ) : (
+                            <span>Claim Fees</span>
+                          )}
+                        </Button>
                         <Button
                           variant="destructive"
                           onClick={() => {

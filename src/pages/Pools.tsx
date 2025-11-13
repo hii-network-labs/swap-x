@@ -13,9 +13,11 @@ import { Badge } from "@/components/ui/badge";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 import { useV4Provider } from "@/hooks/useV4Provider";
 import { fetchPool, Pool as GraphPool } from "@/services/graphql/subgraph";
-import { getPositionDetails, V4PositionDetails, estimatePositionAmounts } from "@/services/uniswap/v4/positionService";
+import { getPositionDetails, V4PositionDetails, estimatePositionAmounts, estimateUnclaimedFees, collectFeesFromPosition } from "@/services/uniswap/v4/positionService";
 import { Input } from "@/components/ui/input";
 
 // Helper functions for positions
@@ -52,7 +54,8 @@ const Pools = () => {
   const { pools, isLoading, error } = useSubgraphPools();
   const { positions, isLoading: positionsLoading, error: positionsError } = useSubgraphPositions();
   const { walletAddress } = useNetwork();
-  const { publicClient, chain } = useV4Provider();
+  const { publicClient, walletClient, chain } = useV4Provider();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
 
   // --- USD pricing helpers (default each token = $1) ---
@@ -68,7 +71,7 @@ const Pools = () => {
   const computeVolumeUSD = (pool: any) => {
     if (pool.volumeUSD != null) {
       const v = parseFloat(pool.volumeUSD);
-      if (!Number.isNaN(v)) return v;
+      if (!Number.isNaN(v) && v > 0) return v;
     }
     // Fallback: derive from token volumes assuming $1 per token
     const vol0 = parseFloat(pool.volumeToken0 || "0");
@@ -78,15 +81,21 @@ const Pools = () => {
     return vol0 * p0 + vol1 * p1;
   };
 
-  // Without reserves, approximate USD liquidity by the pool.liquidity metric itself.
-  // This keeps consistent display while making the intent explicit.
+  // Compute TVL(USD) from actual token amounts in the pool; do not use raw liquidity.
   const computeLiquidityUSD = (pool: any) => {
     if (pool.totalValueLockedUSD != null) {
       const v = parseFloat(pool.totalValueLockedUSD);
-      if (!Number.isNaN(v)) return v;
+      if (!Number.isNaN(v) && v > 0) return v;
     }
-    // Fallback: use raw liquidity metric when TVL USD not available
-    return parseFloat(pool.liquidity || "0");
+    // Fallback: estimate TVL from token balances assuming $1 per token
+    const tvl0 = parseFloat(pool.totalValueLockedToken0 || "0");
+    const tvl1 = parseFloat(pool.totalValueLockedToken1 || "0");
+    const p0 = getTokenUSDPrice(pool.token0?.id);
+    const p1 = getTokenUSDPrice(pool.token1?.id);
+    const est = tvl0 * p0 + tvl1 * p1;
+    if (est > 0) return est;
+    // If token balances are unavailable, return 0 rather than using raw liquidity.
+    return 0;
   };
 
   // Calculate total stats from pools (USD)
@@ -187,6 +196,59 @@ const Pools = () => {
     staleTime: 30000,
   });
 
+  // Estimate unclaimed fees per position via collect simulation
+  const { data: feesMap, isLoading: feesLoading } = useQuery<Record<string, {
+    token0: { symbol: string; amount: string };
+    token1: { symbol: string; amount: string };
+  }>>({
+    queryKey: ["v4-position-fees", chain?.id, tokenIdsForPositionsTabKeys],
+    queryFn: async () => {
+      if (!publicClient || !chain) return {};
+      const entries = await Promise.all(
+        tokenIdsForPositionsTab.map(async (id) => {
+          const res = await estimateUnclaimedFees(publicClient, chain.id, id, walletAddress as `0x${string}`);
+          if (!res) return null;
+          return [id.toString(), {
+            token0: { symbol: res.token0.symbol, amount: res.token0.amount },
+            token1: { symbol: res.token1.symbol, amount: res.token1.amount },
+          }] as const;
+        })
+      );
+      const map: Record<string, { token0: { symbol: string; amount: string }; token1: { symbol: string; amount: string } }> = {};
+      for (const e of entries) {
+        if (e) map[e[0]] = e[1];
+      }
+      return map;
+    },
+    enabled: Boolean(publicClient && chain && tokenIdsForPositionsTab.length > 0),
+    staleTime: 30000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  // Mutation: Claim fees for a position
+  const { toast } = useToast();
+  const claimMutation = useMutation({
+    mutationFn: async (vars: { tokenId: bigint }) => {
+      if (!publicClient || !chain) throw new Error("Provider not ready");
+      if (!walletAddress) throw new Error("Wallet not connected");
+      if (!walletClient) throw new Error("Wallet client unavailable");
+      return collectFeesFromPosition(publicClient, walletClient, chain.id, walletAddress as `0x${string}`, vars.tokenId);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees", chain?.id, tokenIdsForPositionsTabKeys] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts-tab", chain?.id, tokenIdsForPositionsTabKeys] }),
+      ]);
+      toast({ title: "Claimed fees", description: "Transaction sent" });
+    },
+    onError: (err: any) => {
+      const msg = err?.shortMessage || err?.message || "Failed to claim fees";
+      toast({ title: "Claim failed", description: msg, variant: "destructive" });
+      console.error("Claim fees error:", err);
+    },
+  });
+
   // Deprecated formatters: replaced by formatUSD with explicit USD semantics
 
   const calculateAPR = (pool: any) => {
@@ -199,9 +261,12 @@ const Pools = () => {
           const spacing = parseInt(pool.tickSpacing || "10");
           return spacing === 1 ? 0.0001 : spacing === 10 ? 0.0005 : spacing === 60 ? 0.003 : 0.01;
         })();
-    if (!tvlUSD || tvlUSD <= 0) return "N/A";
-    const apr = (volUSD * feeFraction * 365) / tvlUSD * 100;
-    return apr > 0 && Number.isFinite(apr) ? `${apr.toFixed(2)}%` : "N/A";
+    if (!tvlUSD || tvlUSD <= 0) return "N/A"; // không có thanh khoản
+    const aprRaw = (volUSD * feeFraction * 365) / tvlUSD * 100;
+    if (!Number.isFinite(aprRaw)) return "N/A";
+    // TVL > 0 nhưng volume ~ 0 -> APR hợp lý là 0%
+    if (volUSD <= 0 || aprRaw <= 0) return "0.00%";
+    return `${aprRaw.toFixed(2)}%`;
   };
 
   // --- Search & Sort state ---
@@ -352,7 +417,7 @@ const Pools = () => {
           <Alert className="mb-8 border-red-500/50 bg-red-500/10">
             <AlertCircle className="h-4 w-4 text-red-400" />
             <AlertDescription className="text-red-400">
-              Failed to load pools: {error}
+              Unable to load pools. Please try again.
             </AlertDescription>
           </Alert>
         )}
@@ -360,10 +425,8 @@ const Pools = () => {
         {isLoading ? (
           <Card className="p-12 bg-card/80 backdrop-blur-xl border-glass text-center">
             <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
-            <h3 className="text-xl font-semibold mb-2">Loading Pools</h3>
-            <p className="text-muted-foreground">
-              Fetching pool data from subgraph...
-            </p>
+            <h3 className="text-xl font-semibold mb-2">Loading pools</h3>
+            <p className="text-muted-foreground">Please wait while we load pool data.</p>
           </Card>
         ) : pools.length === 0 ? (
           <Card className="p-12 bg-card/80 backdrop-blur-xl border-glass text-center">
@@ -578,18 +641,14 @@ const Pools = () => {
               <Card className="p-12 bg-card/80 backdrop-blur-xl border-glass text-center">
                 <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
                 <h3 className="text-xl font-semibold mb-2">Loading Positions</h3>
-                <p className="text-muted-foreground">
-                  Fetching your positions from the blockchain...
-                </p>
+                <p className="text-muted-foreground">Please wait while we load your positions.</p>
               </Card>
             ) : (
               <>
                 {positionsError && (
                   <Alert className="mb-8 border-red-500/50 bg-red-500/10">
                     <AlertCircle className="h-4 w-4 text-red-400" />
-                    <AlertDescription className="text-red-400">
-                      {positionsError}
-                    </AlertDescription>
+                    <AlertDescription className="text-red-400">Unable to load positions. Please try again.</AlertDescription>
                   </Alert>
                 )}
 
@@ -638,7 +697,7 @@ const Pools = () => {
                 ? `~ ${formatUSD(usdTotal)} (${amt0.toFixed(6)} ${amountInfo.token0.symbol} / ${amt1.toFixed(6)} ${amountInfo.token1.symbol})`
                 : "-";
               const feesEarned = "-"; // TODO: integrate subgraph earnings
-              const apr = "-";
+              const apr = fallbackPool ? calculateAPR(fallbackPool) : "N/A";
               const priceRange = details ? "Custom range" : "";
               const toPrice = (tick: number) => Number(Math.pow(1.0001, tick)).toFixed(4);
               const minPrice = details ? toPrice(details.tickLower) : "";
@@ -715,17 +774,40 @@ const Pools = () => {
                     <div className="grid grid-cols-5 gap-6 pt-4 border-t border-glass">
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">Position</div>
-                        <div className="text-lg font-semibold">{positionValue}</div>
+                        <div className="text-sm">{positionValue}</div>
                       </div>
                       
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">Fees</div>
-                        <div className="text-lg font-semibold">{feesEarned}</div>
+                        <div className="text-sm">
+                          {feesLoading ? (
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Estimating...
+                            </div>
+                          ) : feesMap?.[position.tokenId] ? (
+                            (() => {
+                              const feesInfo = feesMap[position.tokenId];
+                              const f0 = parseFloat(feesInfo.token0.amount) || 0;
+                              const f1 = parseFloat(feesInfo.token1.amount) || 0;
+                              const p0 = getTokenUSDPrice(details?.token0.address ?? fallbackPool?.token0.id);
+                              const p1 = getTokenUSDPrice(details?.token1.address ?? fallbackPool?.token1.id);
+                              const usd = (f0 * p0) + (f1 * p1);
+                              return (
+                                <div className="text-sm">
+                                  ~ {formatUSD(usd)} ({f0.toFixed(6)} {feesInfo.token0.symbol} / {f1.toFixed(6)} {feesInfo.token1.symbol})
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            <div className="text-muted-foreground">-</div>
+                          )}
+                        </div>
                       </div>
                       
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">APR</div>
-                        <div className="text-lg font-semibold">{apr}</div>
+                        <div className="text-sm">{apr}</div>
                       </div>
                       
                       <div>
@@ -742,7 +824,27 @@ const Pools = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-end justify-end">
+                      <div className="flex items-end justify-end gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => claimMutation.mutate({ tokenId: BigInt(position.tokenId) })}
+                          disabled={(() => {
+                            if (!walletAddress || claimMutation.isPending) return true;
+                            const feesInfo = feesMap?.[position.tokenId];
+                            // Cho phép claim nếu không có ước lượng (feesInfo undefined)
+                            if (!feesInfo) return false;
+                            const f0 = parseFloat(feesInfo.token0.amount) || 0;
+                            const f1 = parseFloat(feesInfo.token1.amount) || 0;
+                            return (f0 === 0 && f1 === 0);
+                          })()}
+                          className="min-w-[120px]"
+                        >
+                          {claimMutation.isPending ? (
+                            <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Claiming</span>
+                          ) : (
+                            <span>Claim Fees</span>
+                          )}
+                        </Button>
                         <Button
                           variant="destructive"
                           onClick={() => {

@@ -88,6 +88,27 @@ export const POSITION_MANAGER_ABI = [
     type: "function",
   },
   {
+    inputs: [
+      {
+        components: [
+          { name: "tokenId", type: "uint256" },
+          { name: "recipient", type: "address" },
+          { name: "amount0Max", type: "uint128" },
+          { name: "amount1Max", type: "uint128" },
+        ],
+        name: "params",
+        type: "tuple",
+      },
+    ],
+    name: "collect",
+    outputs: [
+      { name: "amount0", type: "uint256" },
+      { name: "amount1", type: "uint256" },
+    ],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
     inputs: [{ name: "tokenId", type: "uint256" }],
     name: "getPoolAndPositionInfo",
     outputs: [
@@ -124,25 +145,25 @@ export const POSITION_MANAGER_ABI = [
     stateMutability: "view",
     type: "function",
   },
-   {
-      "inputs": [
-         {
-            "internalType": "uint256",
-            "name": "tokenId",
-            "type": "uint256"
-         }
-      ],
-      "name": "getPositionLiquidity",
-      "outputs": [
-         {
-            "internalType": "uint128",
-            "name": "liquidity",
-            "type": "uint128"
-         }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-   },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
+      }
+    ],
+    "name": "getPositionLiquidity",
+    "outputs": [
+      {
+        "internalType": "uint128",
+        "name": "liquidity",
+        "type": "uint128"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
 ] as const;
 
 export const STATE_VIEW_ABI = [
@@ -172,160 +193,195 @@ export const STATE_VIEW_ABI = [
     stateMutability: "view",
     type: "function",
   },
-] as const;
-
-export const QUOTER_ABI = [
-  {
-    inputs: [],
-    name: "poolManager",
-    outputs: [{ name: "", type: "address" }],
-    stateMutability: "view",
-    type: "function",
-  },
   {
     inputs: [
-      {
-        components: [
-          { name: "currency0", type: "address" },
-          { name: "currency1", type: "address" },
-          { name: "fee", type: "uint24" },
-          { name: "tickSpacing", type: "int24" },
-          { name: "hooks", type: "address" },
-        ],
-        name: "poolKey",
-        type: "tuple",
-      },
-      { name: "zeroForOne", type: "bool" },
-      { name: "exactAmount", type: "uint256" },
-      { name: "hookData", type: "bytes" },
+      { name: "poolId", type: "bytes32" },
+      { name: "tickLower", type: "int24" },
+      { name: "tickUpper", type: "int24" },
     ],
-    name: "quoteExactInputSingle",
+    name: "getFeeGrowthInside",
     outputs: [
-      {
-        components: [{ name: "amountOut", type: "uint256" }],
-        name: "quotedAmountOut",
-        type: "tuple",
-      },
+      { name: "feeGrowthInside0X128", type: "uint256" },
+      { name: "feeGrowthInside1X128", type: "uint256" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "poolId", type: "bytes32" },
+      { name: "owner", type: "address" },
+      { name: "tickLower", type: "int24" },
+      { name: "tickUpper", type: "int24" },
+      { name: "salt", type: "bytes32" },
+    ],
+    name: "getPositionInfo",
+    outputs: [
+      { name: "liquidity", type: "uint128" },
+      { name: "feeGrowthInside0LastX128", type: "uint256" },
+      { name: "feeGrowthInside1LastX128", type: "uint256" },
     ],
     stateMutability: "view",
     type: "function",
   },
 ] as const;
 
-export const PERMIT2_ABI = [
-  {
-    inputs: [
-      { name: "user", type: "address" },
+  export const QUOTER_ABI = [
+    {
+      inputs: [],
+      name: "poolManager",
+      outputs: [{ name: "", type: "address" }],
+      stateMutability: "view",
+      type: "function",
+    },
+    {
+      inputs: [
+        {
+          components: [
+            { name: "currency0", type: "address" },
+            { name: "currency1", type: "address" },
+            { name: "fee", type: "uint24" },
+            { name: "tickSpacing", type: "int24" },
+            { name: "hooks", type: "address" },
+          ],
+          name: "poolKey",
+          type: "tuple",
+        },
+        { name: "zeroForOne", type: "bool" },
+        { name: "exactAmount", type: "uint256" },
+        { name: "hookData", type: "bytes" },
+      ],
+      name: "quoteExactInputSingle",
+      outputs: [
+        {
+          components: [{ name: "amountOut", type: "uint256" }],
+          name: "quotedAmountOut",
+          type: "tuple",
+        },
+      ],
+      stateMutability: "view",
+      type: "function",
+    },
+  ] as const;
+
+  export const PERMIT2_ABI = [
+    {
+      inputs: [
+        { name: "user", type: "address" },
+        { name: "token", type: "address" },
+        { name: "spender", type: "address" },
+      ],
+      name: "allowance",
+      outputs: [
+        { name: "amount", type: "uint160" },
+        { name: "expiration", type: "uint48" },
+        { name: "nonce", type: "uint48" },
+      ],
+      stateMutability: "view",
+      type: "function",
+    },
+    {
+      inputs: [
+        { name: "token", type: "address" },
+        { name: "spender", type: "address" },
+        { name: "amount", type: "uint160" },
+        { name: "expiration", type: "uint48" },
+      ],
+      name: "approve",
+      outputs: [],
+      stateMutability: "nonpayable",
+      type: "function",
+    },
+  ] as const;
+
+  export const ERC20_ABI = [
+    {
+      inputs: [
+        { name: "spender", type: "address" },
+        { name: "amount", type: "uint256" },
+      ],
+      name: "approve",
+      outputs: [{ name: "", type: "bool" }],
+      stateMutability: "nonpayable",
+      type: "function",
+    },
+    {
+      inputs: [
+        { name: "owner", type: "address" },
+        { name: "spender", type: "address" },
+      ],
+      name: "allowance",
+      outputs: [{ name: "", type: "uint256" }],
+      stateMutability: "view",
+      type: "function",
+    },
+    {
+      inputs: [],
+      name: "symbol",
+      outputs: [{ name: "", type: "string" }],
+      stateMutability: "view",
+      type: "function",
+    },
+    {
+      inputs: [],
+      name: "name",
+      outputs: [{ name: "", type: "string" }],
+      stateMutability: "view",
+      type: "function",
+    },
+    {
+      inputs: [],
+      name: "decimals",
+      outputs: [{ name: "", type: "uint8" }],
+      stateMutability: "view",
+      type: "function",
+    },
+  ] as const;
+
+  // Minimal Universal Router ABI for execute
+  export const UNIVERSAL_ROUTER_ABI = [
+    // execute function
+    {
+      inputs: [
+        { name: "commands", type: "bytes" },
+        { name: "inputs", type: "bytes[]" },
+        { name: "deadline", type: "uint256" },
+      ],
+      name: "execute",
+      outputs: [],
+      stateMutability: "payable",
+      type: "function",
+    },
+    // Common Universal Router errors to enable revert decoding
+    {
+      type: "error", name: "ExecutionFailed", inputs: [
+        { name: "commandIndex", type: "uint256" },
+        { name: "message", type: "bytes" },
+      ]
+    },
+    { type: "error", name: "TransactionDeadlinePassed", inputs: [] },
+    { type: "error", name: "InsufficientETH", inputs: [] },
+    { type: "error", name: "InsufficientToken", inputs: [] },
+    {
+      type: "error", name: "InvalidCommandType", inputs: [
+        { name: "commandType", type: "uint256" },
+      ]
+    },
+    { type: "error", name: "LengthMismatch", inputs: [] },
+    { type: "error", name: "SliceOutOfBounds", inputs: [] },
+    { type: "error", name: "UnsafeCast", inputs: [] },
+  ] as const;
+
+  export const PERMIT2_TYPES = {
+    PermitDetails: [
       { name: "token", type: "address" },
-      { name: "spender", type: "address" },
-    ],
-    name: "allowance",
-    outputs: [
       { name: "amount", type: "uint160" },
       { name: "expiration", type: "uint48" },
       { name: "nonce", type: "uint48" },
     ],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [
-      { name: "token", type: "address" },
+    PermitBatch: [
+      { name: "details", type: "PermitDetails[]" },
       { name: "spender", type: "address" },
-      { name: "amount", type: "uint160" },
-      { name: "expiration", type: "uint48" },
+      { name: "sigDeadline", type: "uint256" },
     ],
-    name: "approve",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-] as const;
-
-export const ERC20_ABI = [
-  {
-    inputs: [
-      { name: "spender", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    name: "approve",
-    outputs: [{ name: "", type: "bool" }],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-  {
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "spender", type: "address" },
-    ],
-    name: "allowance",
-    outputs: [{ name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "symbol",
-    outputs: [{ name: "", type: "string" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "name",
-    outputs: [{ name: "", type: "string" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "decimals",
-    outputs: [{ name: "", type: "uint8" }],
-    stateMutability: "view",
-    type: "function",
-  },
-] as const;
-
-// Minimal Universal Router ABI for execute
-export const UNIVERSAL_ROUTER_ABI = [
-  // execute function
-  {
-    inputs: [
-      { name: "commands", type: "bytes" },
-      { name: "inputs", type: "bytes[]" },
-      { name: "deadline", type: "uint256" },
-    ],
-    name: "execute",
-    outputs: [],
-    stateMutability: "payable",
-    type: "function",
-  },
-  // Common Universal Router errors to enable revert decoding
-  { type: "error", name: "ExecutionFailed", inputs: [
-    { name: "commandIndex", type: "uint256" },
-    { name: "message", type: "bytes" },
-  ] },
-  { type: "error", name: "TransactionDeadlinePassed", inputs: [] },
-  { type: "error", name: "InsufficientETH", inputs: [] },
-  { type: "error", name: "InsufficientToken", inputs: [] },
-  { type: "error", name: "InvalidCommandType", inputs: [
-    { name: "commandType", type: "uint256" },
-  ] },
-  { type: "error", name: "LengthMismatch", inputs: [] },
-  { type: "error", name: "SliceOutOfBounds", inputs: [] },
-  { type: "error", name: "UnsafeCast", inputs: [] },
-] as const;
-
-export const PERMIT2_TYPES = {
-  PermitDetails: [
-    { name: "token", type: "address" },
-    { name: "amount", type: "uint160" },
-    { name: "expiration", type: "uint48" },
-    { name: "nonce", type: "uint48" },
-  ],
-  PermitBatch: [
-    { name: "details", type: "PermitDetails[]" },
-    { name: "spender", type: "address" },
-    { name: "sigDeadline", type: "uint256" },
-  ],
-} as const;
+  } as const;

@@ -92,13 +92,15 @@ export async function getPool(
       currentTick
     );
 
-    return {
+    const result = {
       pool,
       poolKey,
       sqrtPriceX96: sqrtPriceX96Current.toString(),
       tick: currentTick,
       liquidity: currentLiquidity.toString(),
     };
+    console.groupEnd();
+    return result;
   } catch (error) {
     console.error("❌ Error in getPool:", error);
     console.groupEnd();

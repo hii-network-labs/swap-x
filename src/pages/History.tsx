@@ -43,9 +43,7 @@ const History = () => {
         <Card className="p-8 bg-card/80 backdrop-blur-xl border-glass text-center max-w-md">
           <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
           <h2 className="text-2xl font-bold mb-2">Loading transactions</h2>
-          <p className="text-muted-foreground">
-            Fetching data from the blockchain...
-          </p>
+          <p className="text-muted-foreground">Please wait while we load recent activity.</p>
         </Card>
       </div>
     );
@@ -78,9 +76,7 @@ const History = () => {
         {error && (
           <Alert className="border-red-500/50 bg-red-500/10">
             <AlertCircle className="h-4 w-4 text-red-400" />
-            <AlertDescription className="text-red-400">
-              {error}
-            </AlertDescription>
+            <AlertDescription className="text-red-400">Unable to load transactions. Please try again.</AlertDescription>
           </Alert>
         )}
 
