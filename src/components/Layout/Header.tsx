@@ -123,6 +123,31 @@ export const Header = () => {
             )}
           </div>
         </div>
+
+        {/* Mobile navigation */}
+        <nav className="mt-3 flex md:hidden gap-6 overflow-x-auto no-scrollbar">
+          <NavLink 
+            to="/" 
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+            activeClassName="text-foreground font-medium"
+          >
+            Swap
+          </NavLink>
+          <NavLink 
+            to="/pools" 
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+            activeClassName="text-foreground font-medium"
+          >
+            Pools
+          </NavLink>
+          <NavLink 
+            to="/history" 
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+            activeClassName="text-foreground font-medium"
+          >
+            Transactions
+          </NavLink>
+        </nav>
       </div>
     </header>
   );

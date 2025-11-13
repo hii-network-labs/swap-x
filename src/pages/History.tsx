@@ -92,15 +92,15 @@ const History = () => {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table className="min-w-[780px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Time</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Pool</TableHead>
-                    <TableHead>Details</TableHead>
-                    <TableHead>Sender</TableHead>
-                    <TableHead className="text-right">Block</TableHead>
+                    <TableHead className="whitespace-nowrap">Time</TableHead>
+                    <TableHead className="whitespace-nowrap">Type</TableHead>
+                    <TableHead className="whitespace-nowrap">Pool</TableHead>
+                    <TableHead className="whitespace-nowrap">Details</TableHead>
+                    <TableHead className="whitespace-nowrap">Sender</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Block</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -111,7 +111,7 @@ const History = () => {
                           <TableCell className="font-medium whitespace-nowrap">
                             {formatDate(tx.timestamp)}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="whitespace-nowrap">
                             <Badge variant="secondary" className="bg-blue-500/20 text-blue-400 border-blue-500/30">
                               <TrendingUp className="h-3 w-3 mr-1" />
                               Swap
@@ -149,11 +149,11 @@ const History = () => {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className="font-mono text-sm">
+                            <div className="font-mono text-sm whitespace-nowrap">
                               {swap.sender.substring(0, 6)}...{swap.sender.substring(38)}
                             </div>
                           </TableCell>
-                          <TableCell className="text-right font-mono">
+                          <TableCell className="text-right font-mono whitespace-nowrap">
                             {tx.blockNumber}
                           </TableCell>
                         </TableRow>

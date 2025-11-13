@@ -448,7 +448,8 @@ const Pools = () => {
           </Card>
         ) : (
           <Card className="bg-card/80 backdrop-blur-xl border-glass overflow-hidden">
-            <div className="overflow-x-auto">
+            {/* Desktop/Table view */}
+            <div className="overflow-x-auto hidden md:block">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-glass">
@@ -600,6 +601,110 @@ const Pools = () => {
                   })}
                 </tbody>
               </table>
+            </div>
+            {/* Mobile/Card view */}
+            <div className="md:hidden p-2 space-y-3">
+              {displayPools.map((pool) => {
+                const pair = `${pool.token0.symbol}/${pool.token1.symbol}`;
+                const feeTier = pool.feeTier
+                  ? `${(Number(pool.feeTier) / 10_000).toFixed(2)}%`
+                  : `${(parseInt(pool.tickSpacing) / 10).toFixed(2)}%`;
+
+                const liquidityUSD = formatUSD(computeLiquidityUSD(pool));
+                const volumeUSD = formatUSD(computeVolumeUSD(pool));
+                const aprStr = calculateAPR(pool);
+
+                const initialFee = (() => {
+                  const allowed = ["500", "3000", "10000"] as const;
+                  const tierStr = pool.feeTier ? String(pool.feeTier) : undefined;
+                  if (tierStr && (allowed as readonly string[]).includes(tierStr)) {
+                    return tierStr;
+                  }
+                  const spacing = Number(pool.tickSpacing);
+                  if (spacing === 10) return "500";
+                  if (spacing === 60) return "3000";
+                  if (spacing === 200) return "10000";
+                  return "3000";
+                })();
+
+                return (
+                  <Card key={pool.id} className="border-glass bg-card/80">
+                    <div className="p-4 space-y-3">
+                      {/* Header: pair + icons */}
+                      <div className="flex items-center gap-3">
+                        <div className="flex -space-x-2">
+                          <div className="w-8 h-8 rounded-full bg-gradient-primary flex items-center justify-center border-2 border-card">
+                            <span className="text-xs font-bold">
+                              {pool.token0.symbol.substring(0, 1)}
+                            </span>
+                          </div>
+                          <div className="w-8 h-8 rounded-full bg-gradient-secondary flex items-center justify-center border-2 border-card">
+                            <span className="text-xs font-bold">
+                              {pool.token1.symbol.substring(0, 1)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold">{pair}</span>
+                            <span className="text-xs text-muted-foreground">{feeTier}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Stats */}
+                      <div className="grid grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <div className="text-muted-foreground">Liquidity</div>
+                          <div className="font-medium">{liquidityUSD}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">Volume</div>
+                          <div className="font-medium">{volumeUSD}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">APR</div>
+                          <div className="font-semibold flex items-center gap-1 text-green-400">
+                            <TrendingUp className="h-4 w-4" />
+                            {aprStr}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Footer: actions */}
+                      <div className="flex items-center gap-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          className="flex-1 border-glass"
+                          onClick={() => {
+                            setAddLiquidityPreset({
+                              token0: pool.token0.id,
+                              token1: pool.token1.id,
+                              fee: initialFee,
+                            });
+                            setAddLiquidityOpen(true);
+                          }}
+                          disabled={!walletAddress}
+                        >
+                          Add Liquidity
+                        </Button>
+                        <Button 
+                          variant="default" 
+                          size="sm"
+                          className="flex-1 bg-gradient-primary hover:opacity-90"
+                          onClick={() => {
+                            navigate({ pathname: "/", search: `?from=${pool.token0.id}&to=${pool.token1.id}` });
+                          }}
+                          disabled={!walletAddress}
+                        >
+                          Swap
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
             </div>
           </Card>
         )}
