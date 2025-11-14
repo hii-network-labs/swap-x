@@ -5,6 +5,9 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { useQuery } from "@tanstack/react-query";
 import { Token } from "./TokenSelector";
 import { Loader2 } from "lucide-react";
+import { useNetwork } from "@/contexts/NetworkContext";
+import { useSubgraphPools } from "@/hooks/useSubgraphPools";
+import { getCommonTokens } from "@/config/uniswap";
 
 interface PriceChartProps {
   fromToken: Token | null;
@@ -99,15 +102,26 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
   const [timeRange, setTimeRange] = useState<TimeRange>("7");
   const [isPriceIncreasing, setIsPriceIncreasing] = useState<boolean | null>(null);
   const previousRateRef = useRef<number | null>(null);
+  const { currentNetwork } = useNetwork();
+  const { pools } = useSubgraphPools();
 
   // Default tokens so the chart loads immediately on first render
-  const DEFAULT_FROM: Token = {
-    symbol: "ETH",
-    name: "Ethereum",
-    logo: "⟠",
-    address: "0x0000000000000000000000000000000000000000",
-    coingeckoId: "ethereum",
-  };
+  const isHii = currentNetwork?.chainId === 22469;
+  const DEFAULT_FROM: Token = isHii
+    ? {
+        symbol: "HNC",
+        name: "HNC",
+        logo: "⟠",
+        address: "0x0000000000000000000000000000000000000000",
+        coingeckoId: "",
+      }
+    : {
+        symbol: "ETH",
+        name: "Ethereum",
+        logo: "⟠",
+        address: "0x0000000000000000000000000000000000000000",
+        coingeckoId: "ethereum",
+      };
   const DEFAULT_TO: Token = {
     symbol: "USDC",
     name: "USD Coin",
@@ -119,6 +133,84 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
   const haveSelectedPair = !!(fromToken && toToken);
   const baseFrom = haveSelectedPair ? fromToken! : DEFAULT_FROM;
   const baseTo = haveSelectedPair ? toToken! : DEFAULT_TO;
+
+  const baseUSDT = (import.meta.env.VITE_USDT_ADDRESS as string | undefined);
+  const baseUSDC = (import.meta.env.VITE_USDC_ADDRESS as string | undefined);
+  const baseHNC = (import.meta.env.VITE_NATIVE_TOKEN_ADDRESS as string | undefined);
+  const common = currentNetwork?.chainId ? getCommonTokens(currentNetwork.chainId) : {} as any;
+  const usdtCand = pools.flatMap(p => [p.token0, p.token1]).filter(t => t?.symbol === "USDT").map(t => t.id.toLowerCase());
+  const usdcCand = pools.flatMap(p => [p.token0, p.token1]).filter(t => t?.symbol === "USDC").map(t => t.id.toLowerCase());
+  const hncCand  = pools.flatMap(p => [p.token0, p.token1]).filter(t => ["HNC","WHNC","WETH","WBNB"].includes(String(t?.symbol))).map(t => t.id.toLowerCase());
+  const USDT = (baseUSDT || (common?.USDT as string | undefined) || usdtCand[0])?.toLowerCase();
+  const USDC = (baseUSDC || (common?.USDC as string | undefined) || usdcCand[0])?.toLowerCase();
+  const HNC  = (baseHNC  || (common?.WETH || common?.WBNB) || hncCand[0])?.toLowerCase();
+
+  const getTokenUSDPrice = (_addr?: string) => {
+    if (!_addr || !pools?.length) return NaN;
+    const addr = _addr.toLowerCase();
+    const addrSymbol: Record<string, string> = {};
+    pools.forEach((p) => {
+      addrSymbol[p.token0.id.toLowerCase()] = String(p.token0.symbol || "");
+      addrSymbol[p.token1.id.toLowerCase()] = String(p.token1.symbol || "");
+    });
+    const STABLE = new Set(["USDT", "USDC", "BUSD"]);
+    const symSelf = addrSymbol[addr];
+    if (symSelf && STABLE.has(symSelf)) return 1;
+    const direct = pools.find((p) => {
+      const a0 = p.token0.id.toLowerCase();
+      const a1 = p.token1.id.toLowerCase();
+      const s0 = String(p.token0.symbol || "");
+      const s1 = String(p.token1.symbol || "");
+      return (a0 === addr && STABLE.has(s1)) || (a1 === addr && STABLE.has(s0));
+    });
+    if (direct && direct.tick != null) {
+      const d0 = Number(direct.token0.decimals || "18");
+      const d1 = Number(direct.token1.decimals || "18");
+      const tick = Number(direct.tick);
+      const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+      const a0 = direct.token0.id.toLowerCase();
+      const isToken0Target = a0 === addr;
+      const s0 = String(direct.token0.symbol || "");
+      const s1 = String(direct.token1.symbol || "");
+      if (isToken0Target && STABLE.has(s1)) return ratio;
+      if (!isToken0Target && STABLE.has(s0)) return 1 / ratio;
+    }
+    const priceOfBase = (base?: string): number | null => {
+      const b = base?.toLowerCase();
+      if (!b) return null;
+      const target = pools.find((p) => {
+        const a0 = p.token0.id.toLowerCase();
+        const a1 = p.token1.id.toLowerCase();
+        const s0 = String(p.token0.symbol || "");
+        const s1 = String(p.token1.symbol || "");
+        return (a0 === b && STABLE.has(s1)) || (a1 === b && STABLE.has(s0));
+      });
+      if (!target || target.tick == null) return null;
+      const d0 = Number(target.token0.decimals || "18");
+      const d1 = Number(target.token1.decimals || "18");
+      const tick = Number(target.tick);
+      const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+      const a0 = target.token0.id.toLowerCase();
+      const isBaseToken0 = a0 === b;
+      const baseInStable = isBaseToken0 ? (1 / ratio) : ratio;
+      return baseInStable;
+    };
+    const baseUSD = priceOfBase(HNC || USDT || USDC);
+    if (HNC && baseUSD != null) {
+      const viaHNC = pools.find(p => [p.token0.id.toLowerCase(), p.token1.id.toLowerCase()].includes(addr) && [p.token0.id.toLowerCase(), p.token1.id.toLowerCase()].includes(HNC));
+      if (viaHNC && viaHNC.tick != null) {
+        const d0 = Number(viaHNC.token0.decimals || "18");
+        const d1 = Number(viaHNC.token1.decimals || "18");
+        const tick = Number(viaHNC.tick);
+        const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+        const a0 = viaHNC.token0.id.toLowerCase();
+        const isToken0Target = a0 === addr;
+        const priceInHNC = isToken0Target ? (1 / ratio) : ratio;
+        return priceInHNC * baseUSD;
+      }
+    }
+    return NaN;
+  };
 
   const { data: fromData, isLoading: fromLoading, error: fromError } = useQuery({
     queryKey: ['priceHistory', baseFrom.coingeckoId, timeRange],
@@ -163,16 +255,26 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
     : generateSeededFallbackChartData(timeRange, seedKey);
 
   const currentRate = chartData.length > 0 ? chartData[chartData.length - 1].rate : 0;
+  const derivedCurrentRateUSD = (() => {
+    const pf = getTokenUSDPrice(baseFrom.address);
+    const pt = getTokenUSDPrice(baseTo.address);
+    if (Number.isFinite(pf) && Number.isFinite(pt) && pt > 0) return pf / pt;
+    return NaN;
+  })();
+  const effectiveCurrentRate = Number.isFinite(derivedCurrentRateUSD) ? derivedCurrentRateUSD : currentRate;
+  if (chartData.length > 0 && Number.isFinite(effectiveCurrentRate) && effectiveCurrentRate > 0) {
+    chartData[chartData.length - 1].rate = effectiveCurrentRate;
+  }
   const firstRate = chartData.length > 0 ? chartData[0].rate : 0;
   const priceChange = firstRate > 0 ? ((currentRate - firstRate) / firstRate) * 100 : 0;
 
   // Track price changes for color animation - MUST be before early return
   useEffect(() => {
-    if (currentRate > 0 && previousRateRef.current !== null) {
-      setIsPriceIncreasing(currentRate > previousRateRef.current);
+    if (effectiveCurrentRate > 0 && previousRateRef.current !== null) {
+      setIsPriceIncreasing(effectiveCurrentRate > previousRateRef.current);
     }
-    previousRateRef.current = currentRate;
-  }, [currentRate]);
+    previousRateRef.current = effectiveCurrentRate;
+  }, [effectiveCurrentRate]);
 
   // If tokens are not selected, chart still loads with defaults
 
@@ -191,7 +293,7 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
                   isPriceIncreasing === false ? 'text-red-500 animate-pulse' : ''
                 }`}
               >
-                {currentRate.toFixed(6)}
+                {effectiveCurrentRate.toFixed(6)}
               </span>
               <span 
                 className={`text-sm font-medium transition-colors duration-300 whitespace-nowrap ${

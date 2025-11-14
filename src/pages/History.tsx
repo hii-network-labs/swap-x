@@ -13,6 +13,7 @@ import { ArrowRight, Loader2, RefreshCcw, TrendingUp, TrendingDown } from "lucid
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Fragment } from "react";
 
 const History = () => {
   const { transactions, isLoading, error, refetch } = useSubgraphTransactions();
@@ -105,7 +106,7 @@ const History = () => {
                 </TableHeader>
                 <TableBody>
                   {transactions.map((tx) => (
-                    <>
+                    <Fragment key={tx.id}>
                       {tx.swaps.map((swap) => (
                         <TableRow key={`${tx.id}-${swap.id}`}>
                           <TableCell className="font-medium whitespace-nowrap">
@@ -158,7 +159,7 @@ const History = () => {
                           </TableCell>
                         </TableRow>
                       ))}
-                    </>
+                    </Fragment>
                   ))}
                 </TableBody>
               </Table>

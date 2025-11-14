@@ -7,26 +7,121 @@ import { useSubgraphPositions } from "@/hooks/useSubgraphPositions";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { fetchPool, Pool } from "@/services/graphql/subgraph";
+import { fetchPool, Pool, fetchPools } from "@/services/graphql/subgraph";
+import { getCommonTokens } from "@/config/uniswap";
 import { useV4Provider } from "@/hooks/useV4Provider";
-import { getPositionDetails, V4PositionDetails, estimatePositionAmounts, estimateUnclaimedFees, collectFeesFromPosition } from "@/services/uniswap/v4/positionService";
+import { getPositionDetails, V4PositionDetails, estimatePositionAmounts, estimateUnclaimedFees, collectFeesFromPosition, verifyFeeCollection, invalidatePositionCaches } from "@/services/uniswap/v4/positionService";
 import { RemoveLiquidityDialog } from "@/components/Pools/RemoveLiquidityDialog";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { TxStatusDialog } from "@/components/ui/TxStatusDialog";
 
 const MyPositions = () => {
   const [removeOpen, setRemoveOpen] = useState(false);
   const [removeTokenId, setRemoveTokenId] = useState<bigint | null>(null);
   const [removeLabel, setRemoveLabel] = useState<string | undefined>(undefined);
-  const { walletAddress } = useNetwork();
+  const { walletAddress, setBalancesRefreshKey } = useNetwork();
   const { positions, isLoading, error } = useSubgraphPositions();
   const { publicClient, walletClient, chain } = useV4Provider();
   const queryClient = useQueryClient();
 
-  // --- USD helpers with $1/token assumption and APR approximation ---
-  const getTokenUSDPrice = (_tokenAddress?: string, _symbol?: string) => 1;
-  const formatUSD = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
+  // Pagination for positions list
+  const [posPage, setPosPage] = useState(0);
+  const [posPageSize, setPosPageSize] = useState(5);
+  const totalPages = Math.max(1, Math.ceil((positions?.length || 0) / posPageSize));
+  const clampedPage = Math.min(posPage, totalPages - 1);
+  const startIndex = clampedPage * posPageSize;
+  const endIndex = startIndex + posPageSize;
+  const visiblePositions = positions.slice(startIndex, endIndex);
+
+  // --- USD helpers using subgraph pools to route via HNC/USDT/USDC ---
+  const baseUSDT = (import.meta.env.VITE_USDT_ADDRESS as string | undefined);
+  const baseUSDC = (import.meta.env.VITE_USDC_ADDRESS as string | undefined);
+  const baseHNC = (import.meta.env.VITE_NATIVE_TOKEN_ADDRESS as string | undefined);
+  const common = chain?.id ? getCommonTokens(chain.id) : {} as any;
+  const { data: pools } = useQuery<Pool[]>({
+    queryKey: ["subgraph-pools", chain?.id],
+    enabled: Boolean(chain?.id),
+    queryFn: async () => fetchPools(500, 0),
+    staleTime: 30000,
+  });
+  const usdtCand = (pools || []).flatMap(p => [p.token0, p.token1]).filter(t => t?.symbol === "USDT").map(t => t.id.toLowerCase());
+  const usdcCand = (pools || []).flatMap(p => [p.token0, p.token1]).filter(t => t?.symbol === "USDC").map(t => t.id.toLowerCase());
+  const hncCand  = (pools || []).flatMap(p => [p.token0, p.token1]).filter(t => ["HNC","WHNC","WETH","WBNB"].includes(String(t?.symbol))).map(t => t.id.toLowerCase());
+  const USDT = (baseUSDT || (common?.USDT as string | undefined) || usdtCand[0])?.toLowerCase();
+  const USDC = (baseUSDC || (common?.USDC as string | undefined) || usdcCand[0])?.toLowerCase();
+  const HNC  = (baseHNC  || (common?.WETH || common?.WBNB) || hncCand[0])?.toLowerCase();
+
+  
+
+  const getTokenUSDPrice = (_tokenAddress?: string) => {
+    if (!_tokenAddress || !pools?.length) return NaN;
+    const addr = _tokenAddress.toLowerCase();
+    const addrSymbol: Record<string, string> = {};
+    (pools || []).forEach((p) => {
+      addrSymbol[p.token0.id.toLowerCase()] = String(p.token0.symbol || "");
+      addrSymbol[p.token1.id.toLowerCase()] = String(p.token1.symbol || "");
+    });
+    const STABLE = new Set(["USDT", "USDC", "BUSD"]);
+    const symSelf = addrSymbol[addr];
+    if (symSelf && STABLE.has(symSelf)) return 1;
+    const priceOfBase = (base?: string): number | null => {
+      const b = base?.toLowerCase();
+      if (!b) return null;
+      const targetPool = pools.find((p) => {
+        const a0 = p.token0.id.toLowerCase();
+        const a1 = p.token1.id.toLowerCase();
+        const s0 = String(p.token0.symbol || "");
+        const s1 = String(p.token1.symbol || "");
+        return (a0 === b && STABLE.has(s1)) || (a1 === b && STABLE.has(s0));
+      });
+      if (!targetPool || targetPool.tick == null) return null;
+      const d0 = Number(targetPool.token0.decimals || "18");
+      const d1 = Number(targetPool.token1.decimals || "18");
+      const tick = Number(targetPool.tick);
+      const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+      const a0 = targetPool.token0.id.toLowerCase();
+      const isBaseToken0 = a0 === b;
+      const baseInStable = isBaseToken0 ? (1 / ratio) : ratio;
+      return baseInStable;
+    };
+    const directPool = pools.find((p) => {
+      const a0 = p.token0.id.toLowerCase();
+      const a1 = p.token1.id.toLowerCase();
+      const s0 = String(p.token0.symbol || "");
+      const s1 = String(p.token1.symbol || "");
+      return (a0 === addr && STABLE.has(s1)) || (a1 === addr && STABLE.has(s0));
+    });
+    if (directPool && directPool.tick != null) {
+      const d0 = Number(directPool.token0.decimals || "18");
+      const d1 = Number(directPool.token1.decimals || "18");
+      const tick = Number(directPool.tick);
+      const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+      const a0 = directPool.token0.id.toLowerCase();
+      const isToken0Target = a0 === addr;
+      const s0 = String(directPool.token0.symbol || "");
+      const s1 = String(directPool.token1.symbol || "");
+      if (isToken0Target && STABLE.has(s1)) return ratio;
+      if (!isToken0Target && STABLE.has(s0)) return 1 / ratio;
+    }
+    const baseUSD = priceOfBase(HNC || USDT || USDC);
+    if (HNC && baseUSD != null) {
+      const poolToHNC = pools.find(p => [p.token0.id.toLowerCase(), p.token1.id.toLowerCase()].includes(addr) && [p.token0.id.toLowerCase(), p.token1.id.toLowerCase()].includes(HNC));
+      if (poolToHNC && poolToHNC.tick != null) {
+        const d0 = Number(poolToHNC.token0.decimals || "18");
+        const d1 = Number(poolToHNC.token1.decimals || "18");
+        const tick = Number(poolToHNC.tick);
+        const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+        const a0 = poolToHNC.token0.id.toLowerCase();
+        const isToken0Target = a0 === addr;
+        const priceInHNC = isToken0Target ? (1 / ratio) : ratio;
+        return priceInHNC * baseUSD;
+      }
+    }
+    return NaN;
+  };
+  const formatUSD = (v: number) => (Number.isFinite(v) ? `$${v.toFixed(2)}` : "N/A");
   const computeVolumeUSD = (pool: any) => {
     if (!pool) return 0;
     if (pool.volumeUSD != null) {
@@ -35,8 +130,8 @@ const MyPositions = () => {
     }
     const vol0 = parseFloat(pool.volumeToken0 || "0");
     const vol1 = parseFloat(pool.volumeToken1 || "0");
-    const p0 = getTokenUSDPrice(pool.token0?.id, pool.token0?.symbol);
-    const p1 = getTokenUSDPrice(pool.token1?.id, pool.token1?.symbol);
+    const p0 = getTokenUSDPrice(pool.token0?.id);
+    const p1 = getTokenUSDPrice(pool.token1?.id);
     return vol0 * p0 + vol1 * p1;
   };
   // Compute TVL(USD) from actual token balances; avoid using raw liquidity.
@@ -48,8 +143,8 @@ const MyPositions = () => {
     }
     const tvl0 = parseFloat(pool.totalValueLockedToken0 || "0");
     const tvl1 = parseFloat(pool.totalValueLockedToken1 || "0");
-    const p0 = getTokenUSDPrice(pool.token0?.id, pool.token0?.symbol);
-    const p1 = getTokenUSDPrice(pool.token1?.id, pool.token1?.symbol);
+    const p0 = getTokenUSDPrice(pool.token0?.id);
+    const p1 = getTokenUSDPrice(pool.token1?.id);
     const est = tvl0 * p0 + tvl1 * p1;
     if (est > 0) return est;
     return 0;
@@ -74,17 +169,20 @@ const MyPositions = () => {
   // Fetch pool info for positions (token0/token1/fee, etc.) via poolId
   const tokenIds = positions.map(p => BigInt(p.tokenId)).filter(Boolean);
   const tokenIdKeys = tokenIds.map((id) => id.toString());
+  // Page-scoped token ids for async queries
+  const tokenIdsPage = visiblePositions.map(p => BigInt(p.tokenId)).filter(Boolean);
+  const tokenIdsPageKeys = tokenIdsPage.map(id => id.toString());
   const { data: detailsMap } = useQuery<Record<string, V4PositionDetails>>({
-    queryKey: ["v4-position-details", chain?.id, tokenIdKeys],
+    queryKey: ["v4-position-details-page", chain?.id, tokenIdsPageKeys],
     queryFn: async () => {
       if (!publicClient || !chain) return {};
       console.debug("MyPositions: fetching details", {
         chainId: chain.id,
-        tokenIds: tokenIds.map(id => id.toString()),
+        tokenIds: tokenIdsPage.map(id => id.toString()),
         hasPublicClient: !!publicClient,
       });
       const entries = await Promise.all(
-        tokenIds.map(async (id) => {
+        tokenIdsPage.map(async (id) => {
           const details = await getPositionDetails(publicClient, chain.id, id);
           if (!details) {
             console.warn("MyPositions: getPositionDetails returned null", { tokenId: id.toString() });
@@ -109,7 +207,7 @@ const MyPositions = () => {
       console.debug("MyPositions: details map keys", Object.keys(map));
       return map;
     },
-    enabled: Boolean(publicClient && chain && tokenIds.length > 0),
+    enabled: Boolean(publicClient && chain && tokenIdsPage.length > 0),
     staleTime: 30000,
   });
 
@@ -140,11 +238,11 @@ const MyPositions = () => {
     token0: { symbol: string; estimate: string };
     token1: { symbol: string; estimate: string };
   }>>({
-    queryKey: ["v4-position-amounts", chain?.id, tokenIdKeys],
+    queryKey: ["v4-position-amounts-page", chain?.id, tokenIdsPageKeys],
     queryFn: async () => {
       if (!publicClient || !chain) return {};
       const entries = await Promise.all(
-        tokenIds.map(async (id) => {
+        tokenIdsPage.map(async (id) => {
           const res = await estimatePositionAmounts(publicClient, chain.id, id);
           if (!res) return null;
           return [id.toString(), {
@@ -159,7 +257,7 @@ const MyPositions = () => {
       }
       return map;
     },
-    enabled: Boolean(publicClient && chain && tokenIds.length > 0),
+    enabled: Boolean(publicClient && chain && tokenIdsPage.length > 0),
     staleTime: 30000,
   });
 
@@ -168,11 +266,11 @@ const MyPositions = () => {
     token0: { symbol: string; amount: string };
     token1: { symbol: string; amount: string };
   }>>({
-    queryKey: ["v4-position-fees", chain?.id, tokenIdKeys],
+    queryKey: ["v4-position-fees-page", chain?.id, tokenIdsPageKeys],
     queryFn: async () => {
       if (!publicClient || !chain) return {};
       const entries = await Promise.all(
-        tokenIds.map(async (id) => {
+        tokenIdsPage.map(async (id) => {
           const res = await estimateUnclaimedFees(publicClient, chain.id, id, walletAddress as `0x${string}`);
           if (!res) return null;
           return [id.toString(), {
@@ -187,7 +285,7 @@ const MyPositions = () => {
       }
       return map;
     },
-    enabled: Boolean(publicClient && chain && tokenIds.length > 0),
+    enabled: Boolean(publicClient && chain && tokenIdsPage.length > 0),
     staleTime: 30000,
     retry: false,
     refetchOnWindowFocus: false,
@@ -195,6 +293,12 @@ const MyPositions = () => {
 
   // Mutation: Claim fees for a position
   const { toast } = useToast();
+  const [claimingTokenId, setClaimingTokenId] = useState<bigint | null>(null);
+  const [txOpen, setTxOpen] = useState(false);
+  const [txStatus, setTxStatus] = useState<"loading" | "success" | "error">("loading");
+  const [txTitle, setTxTitle] = useState<string | undefined>(undefined);
+  const [txDesc, setTxDesc] = useState<string | undefined>(undefined);
+  const [txHash, setTxHash] = useState<string | undefined>(undefined);
   const claimMutation = useMutation({
     mutationFn: async (vars: { tokenId: bigint }) => {
       if (!publicClient || !chain) throw new Error("Provider not ready");
@@ -203,15 +307,48 @@ const MyPositions = () => {
       return collectFeesFromPosition(publicClient, walletClient, chain.id, walletAddress as `0x${string}`, vars.tokenId);
     },
     onSuccess: async (res) => {
+      const tidBig = claimingTokenId ?? null;
+      if (tidBig && chain?.id) invalidatePositionCaches(chain.id, tidBig);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["v4-position-fees", chain?.id, tokenIdKeys] }),
-        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts", chain?.id, tokenIdKeys] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees-page", chain?.id, tokenIdsPageKeys] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts-page", chain?.id, tokenIdsPageKeys] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts"] }),
       ]);
-      toast({ title: "Claimed fees", description: `Tx: ${res?.txHash ?? "sent"}` });
+      const tid = claimingTokenId?.toString();
+      let actual: string | undefined = undefined;
+      try {
+        if (tid && publicClient && chain) {
+          const details = detailsMap?.[tid] ?? await getPositionDetails(publicClient, chain.id, BigInt(tid));
+          if (details && res?.txHash) {
+            const verified = await verifyFeeCollection(
+              publicClient,
+              chain.id,
+              res.txHash as `0x${string}`,
+              walletAddress as `0x${string}`,
+              details.token0.address,
+              details.token1.address
+            );
+            actual = `${verified.token0.amount} ${verified.token0.symbol} / ${verified.token1.amount} ${verified.token1.symbol}`;
+          }
+        }
+      } catch {}
+      setTxStatus("success");
+      setTxTitle("Fees claimed");
+      setTxDesc(actual ? `Collected: ${actual}` : "Fees claimed successfully.");
+      setTxHash(res?.txHash);
+      setClaimingTokenId(null);
+      setBalancesRefreshKey((k) => k + 1);
+      setTxOpen(true);
     },
     onError: (err: any) => {
       const msg = err?.shortMessage || err?.message || "Failed to claim fees";
-      toast({ title: "Claim failed", description: msg, variant: "destructive" });
+      setTxStatus("error");
+      setTxTitle("Claim failed");
+      setTxDesc(msg);
+      setTxHash(undefined);
+      setClaimingTokenId(null);
+      setTxOpen(true);
       console.error("Claim fees error:", err);
     },
   });
@@ -285,7 +422,7 @@ const MyPositions = () => {
           </Card>
         ) : (
           <div className="space-y-4">
-            {positions.map((position) => {
+            {visiblePositions.map((position) => {
               const details = detailsMap?.[position.tokenId];
               const fallbackPool = position.poolId ? poolsMap?.[position.poolId] : undefined;
               const tokenPair = details
@@ -300,15 +437,14 @@ const MyPositions = () => {
                 : "-";
               const inRange = details ? (details.currentTick >= details.tickLower && details.currentTick <= details.tickUpper) : false;
               const amountInfo = amountsMap?.[position.tokenId];
-              const price0 = getTokenUSDPrice(details?.token0.address, details?.token0.symbol ?? fallbackPool?.token0.symbol);
-              const price1 = getTokenUSDPrice(details?.token1.address, details?.token1.symbol ?? fallbackPool?.token1.symbol);
+              const price0 = getTokenUSDPrice(details?.token0.address ?? fallbackPool?.token0.id);
+              const price1 = getTokenUSDPrice(details?.token1.address ?? fallbackPool?.token1.id);
               const amt0 = amountInfo ? parseFloat(amountInfo.token0.estimate) : 0;
               const amt1 = amountInfo ? parseFloat(amountInfo.token1.estimate) : 0;
               const usdTotal = (amt0 * price0) + (amt1 * price1);
               const positionValue = amountInfo
                 ? `~ ${formatUSD(usdTotal)} (${amt0.toFixed(6)} ${amountInfo.token0.symbol} / ${amt1.toFixed(6)} ${amountInfo.token1.symbol})`
                 : "-";
-              const feesEarned = "-"; // TODO: integrate subgraph earnings
               const apr = fallbackPool ? calculateAPR(fallbackPool) : "N/A";
               const priceRange = details ? "Custom range" : "";
               const toPrice = (tick: number) => Number(Math.pow(1.0001, tick)).toFixed(4);
@@ -319,7 +455,7 @@ const MyPositions = () => {
                 <Card key={position.id} className="bg-card/80 backdrop-blur-xl border-glass overflow-hidden hover:border-primary/20 transition-colors">
                   <div className="p-6">
                     {/* Top Section */}
-                    <div className="flex items-center justify-between mb-6">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
                       <div className="flex items-center gap-4 flex-1">
                         {/* Token Icons */}
                         <div className="flex -space-x-3">
@@ -332,7 +468,7 @@ const MyPositions = () => {
                         </div>
 
                         {/* Token Info */}
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
                             <h3 className="text-xl font-bold">{tokenPair}</h3>
                             <Badge variant="secondary" className="bg-muted text-muted-foreground">
@@ -360,7 +496,7 @@ const MyPositions = () => {
                       </div>
 
                       {/* Price Range Indicator */}
-                      <div className="flex items-center gap-2 min-w-[300px]">
+                      <div className="flex items-center gap-2 w-full md:min-w-[300px]">
                         <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                           <div 
                             className={cn(
@@ -374,14 +510,23 @@ const MyPositions = () => {
                     </div>
 
                     {/* Bottom Stats Grid */}
-                      <div className="grid grid-cols-5 gap-6 pt-4 border-t border-glass">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 pt-4 border-t border-glass">
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">Position</div>
-                        <div className="text-sm">{positionValue}</div>
+                        <div className="text-sm font-medium">
+                          {amountInfo ? (
+                            <>
+                              {formatUSD(usdTotal)}
+                              <span className="hidden sm:inline"> ({amt0.toFixed(4)} {amountInfo.token0.symbol} / {amt1.toFixed(4)} {amountInfo.token1.symbol})</span>
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </div>
                       </div>
                       
                       <div>
-                        <div className="text-sm text-muted-foreground mb-1">Fees</div>
+                        <div className="text-sm text-muted-foreground mb-1">Claimable Fees</div>
                         <div className="text-sm">
                           {feesLoading ? (
                             <div className="flex items-center gap-2 text-muted-foreground">
@@ -393,12 +538,13 @@ const MyPositions = () => {
                               const feesInfo = feesMap[position.tokenId];
                               const f0 = parseFloat(feesInfo.token0.amount) || 0;
                               const f1 = parseFloat(feesInfo.token1.amount) || 0;
-                              const p0 = getTokenUSDPrice(details?.token0.address, feesInfo.token0.symbol);
-                              const p1 = getTokenUSDPrice(details?.token1.address, feesInfo.token1.symbol);
+                              const p0 = getTokenUSDPrice(details?.token0.address ?? fallbackPool?.token0.id);
+                              const p1 = getTokenUSDPrice(details?.token1.address ?? fallbackPool?.token1.id);
                               const usd = (f0 * p0) + (f1 * p1);
                               return (
-                                <div className="text-sm">
-                                  ~ {formatUSD(usd)} ({f0.toFixed(6)} {feesInfo.token0.symbol} / {f1.toFixed(6)} {feesInfo.token1.symbol})
+                                <div className="text-sm font-medium">
+                                  {formatUSD(usd)}
+                                  <span className="hidden sm:inline"> ({f0.toFixed(4)} {feesInfo.token0.symbol} / {f1.toFixed(4)} {feesInfo.token1.symbol})</span>
                                 </div>
                               );
                             })()
@@ -427,22 +573,35 @@ const MyPositions = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-end justify-end gap-2">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-end justify-start md:justify-end gap-2 col-span-1 sm:col-span-2 md:col-span-1 mt-2 sm:mt-0">
                         <Button
                           variant="secondary"
-                          onClick={() => claimMutation.mutate({ tokenId: BigInt(position.tokenId) })}
+                          onClick={() => {
+                            const tid = BigInt(position.tokenId);
+                            setClaimingTokenId(tid);
+                            setTxOpen(true);
+                            setTxStatus("loading");
+                            setTxTitle("Claiming fees");
+                            setTxDesc(`Submitting claim for position #${position.tokenId}...`);
+                            setTxHash(undefined);
+                            claimMutation.mutate({ tokenId: tid });
+                          }}
                           disabled={(() => {
-                            if (!walletAddress || claimMutation.isPending) return true;
+                            if (!walletAddress) return true;
+                            // Disable only if this position is being claimed
+                            if (claimMutation.isPending && claimingTokenId?.toString() === position.tokenId) return true;
+                            // Disable while fees are estimating/loading
+                            if (feesLoading) return true;
                             const feesInfo = feesMap?.[position.tokenId];
-                            // Cho phép claim nếu không có ước lượng (feesInfo undefined)
+                            // Allow claim if no estimate (feesInfo undefined)
                             if (!feesInfo) return false;
                             const f0 = parseFloat(feesInfo.token0.amount) || 0;
                             const f1 = parseFloat(feesInfo.token1.amount) || 0;
                             return (f0 === 0 && f1 === 0);
                           })()}
-                          className="min-w-[120px]"
+                          className="w-full sm:w-auto"
                         >
-                          {claimMutation.isPending ? (
+                          {claimMutation.isPending && claimingTokenId?.toString() === position.tokenId ? (
                             <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Claiming</span>
                           ) : (
                             <span>Claim Fees</span>
@@ -456,6 +615,7 @@ const MyPositions = () => {
                             setRemoveOpen(true);
                           }}
                           disabled={!walletAddress}
+                          className="w-full sm:w-auto"
                         >
                           Remove
                         </Button>
@@ -465,6 +625,25 @@ const MyPositions = () => {
                 </Card>
               );
             })}
+            <div className="flex items-center justify-between pt-2">
+              <div className="text-sm text-muted-foreground">Page {clampedPage + 1} of {totalPages}</div>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => setPosPage(Math.max(0, clampedPage - 1))}
+                  disabled={clampedPage <= 0}
+                >
+                  Prev
+                </Button>
+                <Button
+                  className="bg-gradient-primary"
+                  onClick={() => setPosPage(Math.min(totalPages - 1, clampedPage + 1))}
+                  disabled={clampedPage >= totalPages - 1}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -477,6 +656,15 @@ const MyPositions = () => {
         tokenPairLabel={removeLabel}
       />
     )}
+    <TxStatusDialog
+      open={txOpen}
+      onOpenChange={setTxOpen}
+      status={txStatus}
+      title={txTitle}
+      description={txDesc}
+      chainId={chain?.id}
+      txHash={txHash}
+    />
     </>
   );
 };

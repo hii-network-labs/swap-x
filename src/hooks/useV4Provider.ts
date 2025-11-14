@@ -20,15 +20,15 @@ export const useV4Provider = () => {
 
   // Define custom chain from current network
   const customChain = useMemo(() => {
+    const isHii = currentNetwork.chainId === 22469;
+    const nativeCurrency = isHii
+      ? { decimals: 18, name: "HNC", symbol: "HNC" }
+      : { decimals: 18, name: "Ether", symbol: "ETH" };
     return defineChain({
       id: currentNetwork.chainId,
       name: currentNetwork.name,
       network: currentNetwork.id,
-      nativeCurrency: {
-        decimals: 18,
-        name: "Ether",
-        symbol: "ETH",
-      },
+      nativeCurrency,
       rpcUrls: {
         default: { http: [currentNetwork.rpcUrl] },
         public: { http: [currentNetwork.rpcUrl] },

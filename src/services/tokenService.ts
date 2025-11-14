@@ -8,6 +8,10 @@ interface ChainTokenList {
 
 // Default token lists for each network
 const DEFAULT_TOKENS: ChainTokenList = {
+  // HII Testnet (default in this app)
+  22469: [
+    { symbol: "HNC", name: "HNC", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "" },
+  ],
   // Ethereum Mainnet
   1: [
     { symbol: "ETH", name: "Ethereum", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "ethereum" },

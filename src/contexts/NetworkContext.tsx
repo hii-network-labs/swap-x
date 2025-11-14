@@ -58,6 +58,8 @@ interface NetworkContextType {
   setCurrentNetwork: (network: Network) => void;
   walletAddress: string | null;
   setWalletAddress: (address: string | null) => void;
+  balancesRefreshKey: number;
+  setBalancesRefreshKey: (value: number | ((prev: number) => number)) => void;
 }
 
 const NetworkContext = createContext<NetworkContextType | undefined>(undefined);
@@ -65,6 +67,7 @@ const NetworkContext = createContext<NetworkContextType | undefined>(undefined);
 export const NetworkProvider = ({ children }: { children: ReactNode }) => {
   const [currentNetwork, setCurrentNetwork] = useState<Network>(NETWORKS[0]);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [balancesRefreshKey, setBalancesRefreshKey] = useState<number>(0);
   const SESSION_KEY = "wallet_session";
   const SESSION_TTL_MS = Number((import.meta.env.VITE_WALLET_SESSION_TTL_MS as string | undefined) ?? 600_000); // default 10 minutes
 
@@ -108,8 +111,8 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
                     chainId: "0x57C5",
                     chainName: "HII Testnet",
                     nativeCurrency: {
-                      name: "Ether",
-                      symbol: "ETH",
+                      name: "HNC",
+                      symbol: "HNC",
                       decimals: 18,
                     },
                     rpcUrls: ["https://rpc-sb.teknix.dev"],
@@ -158,6 +161,8 @@ export const NetworkProvider = ({ children }: { children: ReactNode }) => {
         setCurrentNetwork,
         walletAddress,
         setWalletAddress: handleSetWalletAddress,
+        balancesRefreshKey,
+        setBalancesRefreshKey,
       }}
     >
       {children}

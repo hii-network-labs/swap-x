@@ -20,10 +20,12 @@ export async function fetchTokenInfo(
   tokenAddress: Address
 ): Promise<TokenInfo> {
   if (isNativeETH(tokenAddress)) {
+    const chainId: number | undefined = (client?.chain?.id ?? undefined);
+    const isHii = chainId === 22469 || Number(import.meta.env.VITE_DEFAULT_CHAIN_ID ?? 0) === 22469;
     return {
       address: tokenAddress,
-      symbol: "ETH",
-      name: "Ether",
+      symbol: isHii ? "HNC" : "ETH",
+      name: isHii ? "HNC" : "Ether",
       decimals: 18,
     };
   }

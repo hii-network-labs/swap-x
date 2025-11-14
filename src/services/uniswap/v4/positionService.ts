@@ -1,4 +1,4 @@
-import { Address, decodeAbiParameters, encodeFunctionData } from "viem";
+import { Address, decodeAbiParameters, encodeFunctionData, BaseError, ContractFunctionRevertedError } from "viem";
 import { Token, Percent, Ether, CurrencyAmount } from "@uniswap/sdk-core";
 import { nearestUsableTick, TickMath } from "@uniswap/v3-sdk";
 import { Position, MintOptions, V4PositionManager, PermitDetails } from "@uniswap/v4-sdk";
@@ -21,6 +21,12 @@ const MAX_UINT128 = 2n ** 128n - 1n;
 const DETAILS_CACHE = new Map<string, { value: V4PositionDetails; ts: number }>();
 const FEES_CACHE = new Map<string, { value: { token0: { symbol: string; address: Address; amount: string }; token1: { symbol: string; address: Address; amount: string } }; ts: number }>();
 const CACHE_TTL_MS = 30_000; // 30 seconds
+
+export function invalidatePositionCaches(chainId: number, tokenId: bigint) {
+  const key = `${chainId}-${tokenId.toString()}`;
+  DETAILS_CACHE.delete(key);
+  FEES_CACHE.delete(key);
+}
 
 export function calculateLiquidityToRemove(
   currentLiquidity: bigint,
@@ -294,13 +300,107 @@ export async function mintPosition(
       tickUpper
     });
 
+    // Dynamically estimate native gas fees and adjust native amount to use near-full balance
+    let adjAmount0 = amount0Desired;
+    let adjAmount1 = amount1Desired;
+    const hasNative = token0.isNative || token1.isNative;
+    if (hasNative) {
+      try {
+        const balance = await client.getBalance({ address: account });
+        // Estimate approval gas (if non-native tokens will be approved)
+        let approvalsFee: bigint = 0n;
+        const AMAX = AMOUNT_MAX;
+        // Simulate approvals that code will execute when usePermit2 is true
+        if (usePermit2) {
+          if (!token0.isNative) {
+            const sim0 = await client.simulateContract({
+              account,
+              address: token0.address as Address,
+              abi: ERC20_ABI,
+              functionName: "approve",
+              args: [addresses.permit2 as Address, AMAX],
+            });
+            const gas0 = (sim0.request as any).gas as bigint | undefined;
+            const fee0PerGas = ((sim0.request as any).maxFeePerGas as bigint | undefined) ?? (await client.getGasPrice());
+            if (gas0) approvalsFee += gas0 * fee0PerGas;
+          }
+          if (!token1.isNative) {
+            const sim1 = await client.simulateContract({
+              account,
+              address: token1.address as Address,
+              abi: ERC20_ABI,
+              functionName: "approve",
+              args: [addresses.permit2 as Address, AMAX],
+            });
+            const gas1 = (sim1.request as any).gas as bigint | undefined;
+            const fee1PerGas = ((sim1.request as any).maxFeePerGas as bigint | undefined) ?? (await client.getGasPrice());
+            if (gas1) approvalsFee += gas1 * fee1PerGas;
+          }
+        }
+
+        // Build initial position to simulate mint gas
+        const prePosition = Position.fromAmounts({
+          pool,
+          tickLower,
+          tickUpper,
+          amount0: amount0Desired,
+          amount1: amount1Desired,
+          useFullPrecision: false,
+        });
+        const preParams = V4PositionManager.addCallParameters(prePosition, {
+          recipient: account,
+          slippageTolerance: new Percent(50, 10_000),
+          deadline: (Number((await client.getBlock()).timestamp) + 20 * 60).toString(),
+          useNative: token0.isNative
+            ? Ether.onChain(token0.chainId)
+            : token1.isNative
+            ? Ether.onChain(token1.chainId)
+            : undefined,
+          hookData: "0x",
+        });
+        const { calldata: preCalldata, value: preValue } = preParams;
+
+        // Simulate multicall to estimate gas
+        const simMint = await client.simulateContract({
+          account,
+          address: addresses.positionManager as Address,
+          abi: POSITION_MANAGER_ABI,
+          functionName: "multicall",
+          args: [[preCalldata as `0x${string}`]],
+          value: BigInt(preValue.toString()),
+        });
+        const gasMint = (simMint.request as any).gas as bigint | undefined;
+        const mintFeePerGas = ((simMint.request as any).maxFeePerGas as bigint | undefined) ?? (await client.getGasPrice());
+        const mintFee = gasMint ? gasMint * mintFeePerGas : 0n;
+
+        // Reserve total fees with 15% buffer
+        const totalFees = approvalsFee + mintFee;
+        const totalWithBuffer = totalFees + (totalFees * 15n) / 100n;
+        const availableNative = balance > totalWithBuffer ? balance - totalWithBuffer : 0n;
+        if (availableNative <= 0n) {
+          throw new Error("Số dư native không đủ để trả phí gas khi mint vị thế");
+        }
+
+        // Adjust native-side desired amount to availableNative
+        if (token0.isNative) {
+          const desired0Wei = BigInt(adjAmount0);
+          adjAmount0 = (availableNative < desired0Wei ? availableNative : desired0Wei).toString();
+        } else if (token1.isNative) {
+          const desired1Wei = BigInt(adjAmount1);
+          adjAmount1 = (availableNative < desired1Wei ? availableNative : desired1Wei).toString();
+        }
+      } catch (e) {
+        console.warn("Native fee estimation for mint failed; continuing with user-entered amounts", e);
+      }
+    }
+
     // Create position - use string amounts to satisfy BigintIsh
     const position = Position.fromAmounts({
       pool,
       tickLower,
       tickUpper,
-      amount0: amount0Desired,
-      amount1: amount1Desired,
+      amount0: adjAmount0,
+      amount1: adjAmount1,
       useFullPrecision: false,
     });
 
@@ -857,48 +957,246 @@ export async function collectFeesFromPosition(
   recipient?: Address
 ) {
   try {
+    console.groupCollapsed("🔎 collectFeesFromPosition/start");
+    console.debug("params:", { chainId, account, tokenId: tokenId?.toString(), recipient });
     const addresses = getUniswapV4Addresses(chainId);
     if (!addresses) throw new Error(`V4 not supported on chain ${chainId}`);
 
-    let collectCalldata: string | undefined;
-    const params: any = {
-      tokenId: tokenId,
-      recipient: (recipient ?? account) as Address,
-      amount0Max: MAX_UINT128,
-      amount1Max: MAX_UINT128,
-    };
-    try {
-      // @ts-ignore
-      if (typeof V4PositionManager.collectCallParameters === "function") {
-        // @ts-ignore
-        const { calldata } = V4PositionManager.collectCallParameters(params);
-        collectCalldata = calldata as string;
-      } else {
-        collectCalldata = encodeFunctionData({
-          abi: POSITION_MANAGER_ABI as any,
-          functionName: "collect",
-          args: [params],
-        });
-      }
-    } catch (e) {
-      console.error("collectFeesFromPosition: building collect calldata failed", e);
-      throw e;
+    // Guard against missing tokenId to avoid runtime TypeError
+    if (tokenId === undefined || tokenId === null) {
+      throw new TypeError("collectFeesFromPosition: tokenId is required");
     }
 
-    const txHash = await walletClient.writeContract({
-      account,
-      address: addresses.positionManager as Address,
-      abi: POSITION_MANAGER_ABI,
-      functionName: "multicall",
-      args: [[collectCalldata as `0x${string}`]],
-      value: 0n,
-    });
+    // Verify ownership: ensure the connected wallet owns this position tokenId
+    try {
+      const balance = (await client.readContract({
+        address: addresses.positionManager as Address,
+        abi: POSITION_MANAGER_ABI,
+        functionName: "balanceOf",
+        args: [account],
+      })) as bigint;
 
-    const receipt = await client.waitForTransactionReceipt({ hash: txHash });
-    console.debug("✅ Collect fees success:", txHash);
-    return { txHash, receipt };
+      let owns = false;
+      for (let i = 0n; i < balance; i++) {
+        const id = (await client.readContract({
+          address: addresses.positionManager as Address,
+          abi: POSITION_MANAGER_ABI,
+          functionName: "tokenOfOwnerByIndex",
+          args: [account, i],
+        })) as bigint;
+        if (id === tokenId) {
+          owns = true;
+          break;
+        }
+      }
+
+      if (!owns) {
+        throw new Error("You do not own this position tokenId; cannot collect fees.");
+      }
+    } catch (e: any) {
+      // If enumerable lookup fails, continue; some deployments may not support enumeration fully
+      console.warn("collectFeesFromPosition: ownership check failed or unsupported", e?.message);
+    }
+
+    // Fetch detailed position info to construct SDK Position
+    const details = await getPositionDetails(client, chainId, tokenId);
+    if (!details) throw new Error("Position details not found");
+
+    // Optionally log fee growth state to correlate expected fees
+    try {
+      const token0Info = await fetchTokenInfo(client, details.token0.address);
+      const token1Info = await fetchTokenInfo(client, details.token1.address);
+      const token0 = new Token(chainId, details.token0.address, token0Info.decimals, token0Info.symbol, token0Info.name);
+      const token1 = new Token(chainId, details.token1.address, token1Info.decimals, token1Info.symbol, token1Info.name);
+
+      const { pool } = await getPool(
+        client,
+        chainId,
+        details.poolKey.fee,
+        details.poolKey.tickSpacing,
+        details.poolKey.hooks as Address,
+        token0,
+        token1
+      );
+      if (!pool) throw new Error("Pool not found for position");
+
+      // Pre-collect diagnostics: fee growth and stored position info
+      try {
+        const addresses = getUniswapV4Addresses(chainId);
+        const token0IsA = token0.address.toLowerCase() < token1.address.toLowerCase();
+        const currency0 = token0IsA ? token0 : token1;
+        const currency1 = token0IsA ? token1 : token0;
+        const poolId = Pool.getPoolId(currency0, currency1, details.poolKey.fee, details.poolKey.tickSpacing, details.poolKey.hooks);
+        const salt = `0x${tokenId.toString(16).padStart(64, "0")}`;
+
+        const [stored, current] = await Promise.all([
+          client.readContract({
+            address: addresses.stateView as Address,
+            abi: STATE_VIEW_ABI,
+            functionName: "getPositionInfo",
+            args: [poolId, addresses.positionManager as Address, details.tickLower, details.tickUpper, salt],
+          }) as Promise<[bigint, bigint, bigint]>,
+          client.readContract({
+            address: addresses.stateView as Address,
+            abi: STATE_VIEW_ABI,
+            functionName: "getFeeGrowthInside",
+            args: [poolId, details.tickLower, details.tickUpper],
+          }) as Promise<[bigint, bigint]>,
+        ]);
+        const [liquidityStored, fee0Last, fee1Last] = stored;
+        const [fee0X128, fee1X128] = current;
+        const Q128 = 2n ** 128n;
+        const delta0 = fee0X128 >= fee0Last ? fee0X128 - fee0Last : 0n;
+        const delta1 = fee1X128 >= fee1Last ? fee1X128 - fee1Last : 0n;
+        const raw0 = (delta0 * liquidityStored) / Q128;
+        const raw1 = (delta1 * liquidityStored) / Q128;
+        console.debug("pre-collect diagnostics:", {
+          poolId,
+          tickLower: details.tickLower,
+          tickUpper: details.tickUpper,
+          liquidityStored: liquidityStored.toString(),
+          feeGrowthInside0LastX128: fee0Last.toString(),
+          feeGrowthInside1LastX128: fee1Last.toString(),
+          feeGrowthInside0X128: fee0X128.toString(),
+          feeGrowthInside1X128: fee1X128.toString(),
+          delta0: delta0.toString(),
+          delta1: delta1.toString(),
+          expectedRaw0: raw0.toString(),
+          expectedRaw1: raw1.toString(),
+        });
+      } catch (diagErr: any) {
+        console.warn("pre-collect diagnostics failed:", diagErr?.message || String(diagErr));
+      }
+
+      // Construct Position via SDK (full liquidity)
+      const sdkPosition = new Position({
+        pool,
+        tickLower: details.tickLower,
+        tickUpper: details.tickUpper,
+        liquidity: details.liquidity.toString(),
+      });
+
+      // Build collect options per Uniswap v4 guide
+      const collectOptions = {
+        tokenId: tokenId.toString(),
+        recipient: (recipient ?? account) as Address,
+        slippageTolerance: new Percent(50, 10_000), // 0.5%
+        deadline: Math.floor(Date.now() / 1000) + 1200, // 20 minutes
+        hookData: "0x",
+      } as const;
+
+      const { calldata, value } = V4PositionManager.collectCallParameters(sdkPosition, collectOptions);
+      console.debug("collectCallParameters:", { calldata, value });
+
+      // Simulate multicall to catch and surface revert reasons before sending
+      let simulation;
+      try {
+        simulation = await client.simulateContract({
+          account,
+          address: addresses.positionManager as Address,
+          abi: POSITION_MANAGER_ABI,
+          functionName: "multicall",
+          args: [[calldata as `0x${string}`]],
+          value: BigInt(value),
+        });
+        console.debug("multicall(simulate) OK:", {
+          request: simulation?.request,
+          tokenId: tokenId.toString(),
+          recipient: collectOptions.recipient,
+          slippageBps: 50,
+          deadline: collectOptions.deadline,
+        });
+      } catch (err) {
+        if (err instanceof BaseError) {
+          const revertError = err.walk((e) => e instanceof ContractFunctionRevertedError);
+          if (revertError instanceof ContractFunctionRevertedError) {
+            console.error("multicall(simulate) reverted:", {
+              errorName: revertError.data?.errorName,
+              decodedArgs: revertError.data?.args,
+              abiItem: revertError.data?.abiItem,
+            });
+          }
+        }
+        console.error("multicall(simulate) error:", (err as any)?.shortMessage || (err as any)?.message || String(err));
+        throw err;
+      }
+
+  const txHash = await walletClient.writeContract(simulation.request);
+  const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+  console.debug("✅ Collect fees success:", txHash);
+  console.groupEnd();
+  return { txHash, receipt };
+    } catch (inner) {
+      throw inner;
+    }
   } catch (error) {
-    console.error("❌ Error in collectFeesFromPosition:", error);
+    // Improve error reporting to help diagnose common failures
+    const msg = (error as any)?.shortMessage || (error as any)?.message || String(error);
+    console.error("❌ Error in collectFeesFromPosition:", msg);
+    console.groupEnd();
     throw error;
+  }
+}
+
+/**
+ * Verify collected fees by decoding ERC20 Transfer logs in the receipt.
+ * Sums amounts transferred to recipient for token0 and token1.
+ */
+export async function verifyFeeCollection(
+  client: any,
+  chainId: number,
+  txHash: `0x${string}`,
+  recipient: Address,
+  token0Address: Address,
+  token1Address: Address
+): Promise<{
+  token0: { address: Address; symbol: string; amount: string };
+  token1: { address: Address; symbol: string; amount: string };
+}> {
+  try {
+    const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+    const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"; // keccak256("Transfer(address,address,uint256)")
+
+    let amt0 = 0n;
+    let amt1 = 0n;
+
+    for (const log of receipt.logs || []) {
+      if (!log || !log.topics || log.topics.length < 3) continue;
+      const isToken0 = log.address.toLowerCase() === token0Address.toLowerCase();
+      const isToken1 = log.address.toLowerCase() === token1Address.toLowerCase();
+      if (!isToken0 && !isToken1) continue;
+      if (log.topics[0].toLowerCase() !== transferTopic) continue;
+      // topics[2] = indexed to address (padded)
+      const toTopic = log.topics[2].toLowerCase();
+      const padRecipient = `0x${recipient.toLowerCase().replace("0x", "").padStart(64, "0")}`;
+      if (toTopic !== padRecipient) continue;
+      // data: uint256 value
+      const value = BigInt(log.data as `0x${string}`);
+      if (isToken0) amt0 += value;
+      if (isToken1) amt1 += value;
+    }
+
+    // Format with decimals
+    const [t0, t1] = await Promise.all([
+      fetchTokenInfo(client, token0Address),
+      fetchTokenInfo(client, token1Address),
+    ]);
+    const token0 = new Token(chainId, token0Address, t0.decimals, t0.symbol, t0.name);
+    const token1 = new Token(chainId, token1Address, t1.decimals, t1.symbol, t1.name);
+
+    const amount0 = CurrencyAmount.fromRawAmount(token0, amt0.toString()).toSignificant(6);
+    const amount1 = CurrencyAmount.fromRawAmount(token1, amt1.toString()).toSignificant(6);
+
+    return {
+      token0: { address: token0Address, symbol: token0.symbol ?? t0.symbol, amount: amount0 },
+      token1: { address: token1Address, symbol: token1.symbol ?? t1.symbol, amount: amount1 },
+    };
+  } catch (error) {
+    console.warn("verifyFeeCollection failed:", (error as any)?.message || String(error));
+    // Fallback to zeros
+    return {
+      token0: { address: token0Address, symbol: "", amount: "0" },
+      token1: { address: token1Address, symbol: "", amount: "0" },
+    };
   }
 }

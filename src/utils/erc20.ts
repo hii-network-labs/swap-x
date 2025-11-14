@@ -179,6 +179,7 @@ function generateTokenLogo(symbol: string): string {
 
   // Common token logos
   const logoMap: { [key: string]: string } = {
+    HNC: "⟠",
     ETH: "⟠",
     WETH: "Ⓦ",
     BTC: "₿",

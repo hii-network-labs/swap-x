@@ -21,11 +21,12 @@ import { Position } from "@uniswap/v4-sdk";
 import { nearestUsableTick } from "@uniswap/v3-sdk";
 import { initializePool, getPool } from "@/services/uniswap/v4/poolService";
 import { mintPosition } from "@/services/uniswap/v4/positionService";
-import { fetchTokenInfo } from "@/services/uniswap/v4/helpers";
+import { fetchTokenInfo, ZERO_ADDRESS } from "@/services/uniswap/v4/helpers";
 import { isV4SupportedNetwork } from "@/config/uniswapV4";
 import { AlertCircle, ChevronsUpDown } from "lucide-react";
 import { useSubgraphPools } from "@/hooks/useSubgraphPools";
 import { TxStatusDialog } from "@/components/ui/TxStatusDialog";
+import { getTokenBalance, getNativeBalance } from "@/utils/erc20";
 
 interface AddLiquidityDialogProps {
   open: boolean;
@@ -36,19 +37,21 @@ interface AddLiquidityDialogProps {
 }
 
 const FEE_TIERS = [
+  { value: "100", label: "0.01%" },
   { value: "500", label: "0.05% (Stablecoins)" },
   { value: "3000", label: "0.3% (Standard)" },
   { value: "10000", label: "1% (Exotic)" },
 ];
 
 const TICK_SPACINGS: Record<string, string> = {
+  "100": "1",
   "500": "10",
   "3000": "60",
   "10000": "200",
 };
 
 export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialToken1, initialFee }: AddLiquidityDialogProps) {
-  const { currentNetwork, walletAddress } = useNetwork();
+  const { currentNetwork, walletAddress, balancesRefreshKey, setBalancesRefreshKey } = useNetwork();
   const { publicClient, walletClient } = useV4Provider();
   const { pools } = useSubgraphPools();
 
@@ -70,9 +73,28 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
   const [txTitle, setTxTitle] = useState<string | undefined>(undefined);
   const [txDesc, setTxDesc] = useState<string | undefined>(undefined);
   const [txHash, setTxHash] = useState<string | undefined>(undefined);
+  const [token0Balance, setToken0Balance] = useState<string | null>(null);
+  const [token1Balance, setToken1Balance] = useState<string | null>(null);
+  const [loadingBalances, setLoadingBalances] = useState(false);
+  const [insufficient0, setInsufficient0] = useState<string | null>(null);
+  const [insufficient1, setInsufficient1] = useState<string | null>(null);
 
   const isSupported = isV4SupportedNetwork(currentNetwork.chainId);
   const tickSpacing = TICK_SPACINGS[fee];
+
+  const isNativeAddress = (addr?: string) => addr?.toLowerCase() === ZERO_ADDRESS.toLowerCase();
+  const DEFAULT_MINT_GAS_UNITS = 500000; // rough estimate
+  const GAS_BUFFER_MULTIPLIER = 1.2;
+  const estimateNativeGasReserve = async (): Promise<number> => {
+    try {
+      if (!publicClient) return 0.02;
+      const gasPriceWei = Number(await publicClient.getGasPrice());
+      const feeWei = gasPriceWei * DEFAULT_MINT_GAS_UNITS * GAS_BUFFER_MULTIPLIER;
+      return feeWei / 1e18;
+    } catch {
+      return 0.02;
+    }
+  };
 
   // Chuẩn hóa chuỗi số thập phân: thay ',' bằng '.', loại bỏ ký tự không hợp lệ
   const sanitizeDecimalInput = (value: string) => {
@@ -86,6 +108,13 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
     return v;
   };
 
+  // Chuẩn hóa chuỗi xuất ra input: luôn dùng '.' làm dấu thập phân
+  const formatDecimalOutput = (num: number, maximumFractionDigits: number = 6) => {
+    if (!Number.isFinite(num)) return "";
+    const s = num.toFixed(maximumFractionDigits);
+    return s.replace(/\.0+$/, "").replace(/(\..*?)0+$/, "$1");
+  };
+
   // Prefill when dialog opens or presets change
   useEffect(() => {
     if (!open) return;
@@ -94,20 +123,92 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
     if (initialFee && TICK_SPACINGS[initialFee]) setFee(initialFee);
   }, [open, initialToken0, initialToken1, initialFee]);
 
+  // Load balances for token0/token1
+  useEffect(() => {
+    const loadBalances = async () => {
+      try {
+        setLoadingBalances(true);
+        if (!walletAddress || !currentNetwork?.rpcUrl) {
+          setToken0Balance(null);
+          setToken1Balance(null);
+          return;
+        }
+        const [b0, b1] = await Promise.all([
+          isNativeAddress(token0Address)
+            ? getNativeBalance(walletAddress, currentNetwork.rpcUrl)
+            : (token0Address ? getTokenBalance(token0Address, walletAddress, currentNetwork.rpcUrl) : Promise.resolve(null)),
+          isNativeAddress(token1Address)
+            ? getNativeBalance(walletAddress, currentNetwork.rpcUrl)
+            : (token1Address ? getTokenBalance(token1Address, walletAddress, currentNetwork.rpcUrl) : Promise.resolve(null)),
+        ]);
+        setToken0Balance(b0);
+        setToken1Balance(b1);
+      } catch (e) {
+        setToken0Balance(null);
+        setToken1Balance(null);
+      } finally {
+        setLoadingBalances(false);
+      }
+    };
+    loadBalances();
+  }, [walletAddress, currentNetwork?.rpcUrl, token0Address, token1Address, balancesRefreshKey]);
+
+  // Validate amounts vs balances and gas reserve for native
+  useEffect(() => {
+    const check0 = async () => {
+      setInsufficient0(null);
+      const amt = parseFloat(amount0 || "0");
+      const bal = parseFloat(token0Balance || "0");
+      if (!Number.isFinite(amt) || amt <= 0 || !Number.isFinite(bal)) return;
+      if (isNativeAddress(token0Address)) {
+        const reserve = await estimateNativeGasReserve();
+        const maxSpendable = Math.max(0, bal - reserve);
+        if (maxSpendable <= 0) setInsufficient0("Insufficient native balance to cover gas fees.");
+        else if (amt > maxSpendable) setInsufficient0(`Token0 amount exceeds balance after reserving gas (~${reserve.toFixed(4)}).`);
+      } else if (amt > bal) {
+        setInsufficient0("Insufficient Token0 balance.");
+      }
+    };
+    const check1 = async () => {
+      setInsufficient1(null);
+      const amt = parseFloat(amount1 || "0");
+      const bal = parseFloat(token1Balance || "0");
+      if (!Number.isFinite(amt) || amt <= 0 || !Number.isFinite(bal)) return;
+      if (isNativeAddress(token1Address)) {
+        const reserve = await estimateNativeGasReserve();
+        const maxSpendable = Math.max(0, bal - reserve);
+        if (maxSpendable <= 0) setInsufficient1("Insufficient native balance to cover gas fees.");
+        else if (amt > maxSpendable) setInsufficient1(`Token1 amount exceeds balance after reserving gas (~${reserve.toFixed(4)}).`);
+      } else if (amt > bal) {
+        setInsufficient1("Insufficient Token1 balance.");
+      }
+    };
+    check0();
+    check1();
+  }, [amount0, amount1, token0Address, token1Address, token0Balance, token1Balance]);
+
   // Build token list from pools
   const poolTokens = useMemo(() => {
     const map = new Map<string, { address: string; symbol: string; name: string }>();
     for (const p of pools) {
       if (p.token0?.id && p.token0?.symbol) {
         const addr = p.token0.id.toLowerCase();
+        const isHii = currentNetwork.chainId === 22469;
+        const isZero = addr === ZERO_ADDRESS.toLowerCase();
+        const displaySymbol = isZero && isHii ? "HNC" : p.token0.symbol;
+        const displayName = isZero && isHii ? "HNC" : (p.token0.name || p.token0.symbol);
         if (!map.has(addr)) {
-          map.set(addr, { address: addr, symbol: p.token0.symbol, name: p.token0.name || p.token0.symbol });
+          map.set(addr, { address: addr, symbol: displaySymbol, name: displayName });
         }
       }
       if (p.token1?.id && p.token1?.symbol) {
         const addr = p.token1.id.toLowerCase();
+        const isHii = currentNetwork.chainId === 22469;
+        const isZero = addr === ZERO_ADDRESS.toLowerCase();
+        const displaySymbol = isZero && isHii ? "HNC" : p.token1.symbol;
+        const displayName = isZero && isHii ? "HNC" : (p.token1.name || p.token1.symbol);
         if (!map.has(addr)) {
-          map.set(addr, { address: addr, symbol: p.token1.symbol, name: p.token1.name || p.token1.symbol });
+          map.set(addr, { address: addr, symbol: displaySymbol, name: displayName });
         }
       }
     }
@@ -251,8 +352,8 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
         const otherDecimals = token0IsA ? token1Meta.decimals : token0Meta.decimals;
         const otherNum = Number(otherRawStr) / 10 ** otherDecimals;
         // limit to 6 decimals to avoid noisy UI
-        const otherDisplay = otherNum.toLocaleString(undefined, { maximumFractionDigits: 6, useGrouping: false });
-        setAmount1(otherDisplay);
+        const otherDisplay = formatDecimalOutput(otherNum, 6);
+        setAmount1(sanitizeDecimalInput(otherDisplay));
       } catch (e) {
         // silent fail for UX; do not toast here
       }
@@ -338,8 +439,8 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
         const otherRawStr = token0IsA ? need0.toString() : need1.toString();
         const otherDecimals = token0IsA ? token0Meta.decimals : token1Meta.decimals;
         const otherNum = Number(otherRawStr) / 10 ** otherDecimals;
-        const otherDisplay = otherNum.toLocaleString(undefined, { maximumFractionDigits: 6, useGrouping: false });
-        setAmount0(otherDisplay);
+        const otherDisplay = formatDecimalOutput(otherNum, 6);
+        setAmount0(sanitizeDecimalInput(otherDisplay));
       } catch (e) {
         // silent fail
       }
@@ -491,6 +592,8 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
           title: "Pool Created!",
           description: `Pool for ${token0Info.symbol}/${token1Info.symbol} initialized`,
         });
+        // Reload balances after pool initialization
+        setBalancesRefreshKey((k) => k + 1);
       }
 
       // Convert amounts to smallest unit
@@ -524,6 +627,8 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
         title: "Liquidity Added!",
         description: `Successfully added liquidity to ${token0Info.symbol}/${token1Info.symbol}`,
       });
+      // Reload balances after successful mint
+      setBalancesRefreshKey((k) => k + 1);
 
       onOpenChange(false);
 
@@ -632,15 +737,18 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
                   </Command>
                 </PopoverContent>
               </Popover>
-            </div>
-            {/* No need to repeat token name next to address; label already shows it */}
+          </div>
+          {/* No need to repeat token name next to address; label already shows it */}
+            {token0Balance && (
+              <div className="text-xs text-muted-foreground">Token0 balance: {parseFloat(token0Balance).toFixed(6)}</div>
+            )}
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="amount0">{token0Meta?.symbol || token0Meta?.name ? `${token0Meta?.symbol || token0Meta?.name} Amount` : "Token 0 Amount"}</Label>
             <Input
               id="amount0"
-              type="number"
+              type="text"
               placeholder="1.0"
               value={amount0}
               onChange={(e) => {
@@ -650,6 +758,11 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
               inputMode="decimal"
               step="any"
             />
+            {insufficient0 && (
+              <Alert className="mt-2" variant="destructive">
+                <AlertDescription>{insufficient0}</AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -690,15 +803,18 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
                   </Command>
                 </PopoverContent>
               </Popover>
-            </div>
-            {/* No need to repeat token name next to address; label already shows it */}
+          </div>
+          {/* No need to repeat token name next to address; label already shows it */}
+            {token1Balance && (
+              <div className="text-xs text-muted-foreground">Token1 balance: {parseFloat(token1Balance).toFixed(6)}</div>
+            )}
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="amount1">{token1Meta?.symbol || token1Meta?.name ? `${token1Meta?.symbol || token1Meta?.name} Amount` : "Token 1 Amount"}</Label>
             <Input
               id="amount1"
-              type="number"
+              type="text"
               placeholder="1000.0"
               value={amount1}
               onChange={(e) => {
@@ -708,6 +824,11 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
               inputMode="decimal"
               step="any"
             />
+            {insufficient1 && (
+              <Alert className="mt-2" variant="destructive">
+                <AlertDescription>{insufficient1}</AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -731,7 +852,7 @@ export function AddLiquidityDialog({ open, onOpenChange, initialToken0, initialT
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleAddLiquidity} disabled={!walletAddress || isLoading || checkingPool}>
+          <Button onClick={handleAddLiquidity} disabled={!walletAddress || isLoading || checkingPool || !!insufficient0 || !!insufficient1}>
             {isLoading 
               ? "Processing..." 
               : poolExists === false 

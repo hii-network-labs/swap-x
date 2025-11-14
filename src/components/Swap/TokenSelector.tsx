@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, Search } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useNetwork } from "@/contexts/NetworkContext";
 
 export interface Token {
   symbol: string;
@@ -13,14 +14,21 @@ export interface Token {
   coingeckoId: string;
 }
 
-const POPULAR_TOKENS: Token[] = [
-  { symbol: "ETH", name: "Ethereum", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "ethereum" },
-  { symbol: "USDC", name: "USD Coin", logo: "💵", address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", coingeckoId: "usd-coin" },
-  { symbol: "USDT", name: "Tether", logo: "₮", address: "0xdac17f958d2ee523a2206206994597c13d831ec7", coingeckoId: "tether" },
-  { symbol: "DAI", name: "Dai Stablecoin", logo: "◈", address: "0x6b175474e89094c44da98b954eedeac495271d0f", coingeckoId: "dai" },
-  { symbol: "WBTC", name: "Wrapped Bitcoin", logo: "₿", address: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599", coingeckoId: "wrapped-bitcoin" },
-  { symbol: "UNI", name: "Uniswap", logo: "🦄", address: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984", coingeckoId: "uniswap" },
-];
+const usePopularTokens = () => {
+  const { currentNetwork } = useNetwork();
+  const isHii = currentNetwork.chainId === 22469;
+  const native = isHii
+    ? { symbol: "HNC", name: "HNC", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "" }
+    : { symbol: "ETH", name: "Ethereum", logo: "⟠", address: "0x0000000000000000000000000000000000000000", coingeckoId: "ethereum" };
+  return [
+    native,
+    { symbol: "USDC", name: "USD Coin", logo: "💵", address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", coingeckoId: "usd-coin" },
+    { symbol: "USDT", name: "Tether", logo: "₮", address: "0xdac17f958d2ee523a2206206994597c13d831ec7", coingeckoId: "tether" },
+    { symbol: "DAI", name: "Dai Stablecoin", logo: "◈", address: "0x6b175474e89094c44da98b954eedeac495271d0f", coingeckoId: "dai" },
+    { symbol: "WBTC", name: "Wrapped Bitcoin", logo: "₿", address: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599", coingeckoId: "wrapped-bitcoin" },
+    { symbol: "UNI", name: "Uniswap", logo: "🦄", address: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984", coingeckoId: "uniswap" },
+  ] as Token[];
+};
 
 interface TokenSelectorProps {
   selectedToken: Token | null;
@@ -32,8 +40,9 @@ interface TokenSelectorProps {
 export const TokenSelector = ({ selectedToken, onSelectToken, tokens, allowedAddresses }: TokenSelectorProps) => {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const popularTokens = usePopularTokens();
 
-  const baseTokens = (tokens && tokens.length > 0) ? tokens : POPULAR_TOKENS;
+  const baseTokens = (tokens && tokens.length > 0) ? tokens : popularTokens;
   const byAllowed = allowedAddresses && allowedAddresses.length > 0
     ? baseTokens.filter(t => allowedAddresses.includes(t.address.toLowerCase()))
     : baseTokens;

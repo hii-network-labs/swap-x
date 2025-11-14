@@ -195,7 +195,70 @@ export async function swapExactInSingle(params: SwapParams) {
   inputs.forEach((inp, i) => console.debug(`inputs[${i}] length:`, inp.length, "head:", inp.slice(0, 66)));
 
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour
-  const txValue = isNativeInput ? amountInWei : 0n;
+  // If input is native, estimate fees and adjust amount to use near-full balance
+  let finalAmountWei = amountInWei;
+  if (isNativeInput) {
+    try {
+      const balance = await publicClient.getBalance({ address: payer });
+      // First simulation with user-entered amount to get gas estimate
+      const { request: simReq1 } = await publicClient.simulateContract({
+        account: payer,
+        address: addresses.universalRouter as Address,
+        abi: UNIVERSAL_ROUTER_ABI,
+        functionName: "execute",
+        args: [commands, inputs, deadline],
+        value: amountInWei,
+      });
+      const gas1 = (simReq1 as any).gas as bigint | undefined;
+      const maxFeePerGas = ((simReq1 as any).maxFeePerGas as bigint | undefined) ?? undefined;
+      const gasPrice = maxFeePerGas ?? (await publicClient.getGasPrice());
+      const feeEstimate = gas1 ? gas1 * gasPrice : 0n;
+      // Add 15% safety buffer
+      const feeWithBuffer = feeEstimate + (feeEstimate * 15n) / 100n;
+      const available = balance > feeWithBuffer ? balance - feeWithBuffer : 0n;
+      if (available <= 0n) {
+        console.groupEnd();
+        throw Object.assign(new Error("Số dư native không đủ để trả phí gas"), { cause: new Error("Insufficient native for gas") });
+      }
+      finalAmountWei = available < amountInWei ? available : amountInWei;
+      // Recompute minOut for reduced amount
+      if (finalAmountWei !== amountInWei) {
+        try {
+          const fromQuoter2 = await quoteExactInputSingle({
+            client: publicClient,
+            chainId,
+            tokenIn,
+            tokenOut,
+            amount: Number(finalAmountWei) / Math.pow(10, tokenA.decimals),
+            tickSpacing: resolvedTick,
+            fee: resolvedFee,
+            hooks,
+          });
+          if (fromQuoter2?.amountOut && fromQuoter2.rate && fromQuoter2.rate > 0) {
+            const slipMult = 1 - (slippageBps ?? 100) / 10_000;
+            const minOutHuman2 = Math.max(0, fromQuoter2.amountOut * slipMult);
+            const minOutWei2 = BigInt(Math.floor(minOutHuman2 * Math.pow(10, tokenOutInfo.decimals)));
+            amountOutMinimum = minOutWei2.toString();
+          } else {
+            amountOutMinimum = "0";
+          }
+        } catch {}
+      }
+      // Rebuild actions with adjusted amount
+      const swapCfg2: SwapExactInSingle = { poolKey, zeroForOne, amountIn: finalAmountWei.toString(), amountOutMinimum, hookData: "0x" };
+      const planner2 = new V4Planner();
+      planner2.addAction(Actions.SWAP_EXACT_IN_SINGLE, [swapCfg2]);
+      planner2.addAction(Actions.SETTLE_ALL, [inputCurrency, finalAmountWei.toString()]);
+      planner2.addAction(Actions.TAKE_ALL, [outputCurrency, '0']);
+      const encoded2 = planner2.finalize() as `0x${string}`;
+      commands = ("0x" + "10") as `0x${string}`;
+      inputs.splice(0, inputs.length, encoded2);
+    } catch (e) {
+      console.warn("native fee estimation failed; proceeding with entered amount", e);
+    }
+  }
+
+  const txValue = isNativeInput ? finalAmountWei : 0n;
 
   // Simulate & send
   try {

@@ -10,6 +10,8 @@ import { useV4Provider } from "@/hooks/useV4Provider";
 import { Address } from "viem";
 import { removeLiquidityFromPosition, estimateRemoveAmounts } from "@/services/uniswap/v4/positionService";
 import { toast } from "@/hooks/use-toast";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidatePositionCaches } from "@/services/uniswap/v4/positionService";
 
 interface RemoveLiquidityDialogProps {
   open: boolean;
@@ -19,8 +21,9 @@ interface RemoveLiquidityDialogProps {
 }
 
 export function RemoveLiquidityDialog({ open, onOpenChange, tokenId, tokenPairLabel }: RemoveLiquidityDialogProps) {
-  const { currentNetwork, walletAddress } = useNetwork();
+  const { currentNetwork, walletAddress, setBalancesRefreshKey } = useNetwork();
   const { publicClient, walletClient } = useV4Provider();
+  const queryClient = useQueryClient();
 
   const [isLoading, setIsLoading] = useState(false);
   const [percentage, setPercentage] = useState<number>(100);
@@ -117,6 +120,15 @@ export function RemoveLiquidityDialog({ open, onOpenChange, tokenId, tokenPairLa
       setTxTitle("Liquidity removed");
       setTxDesc(`Successfully removed ${percentage}% liquidity${percentage === 100 ? " and burned NFT" : ""}.`);
       setTxHash(res?.txHash);
+      if (currentNetwork?.chainId) invalidatePositionCaches(currentNetwork.chainId, tokenId);
+      setBalancesRefreshKey((k) => k + 1);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees-page"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts-page"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts-tab"] }),
+      ]);
       console.debug("✅ onRemove success", { txHash: res?.txHash });
       console.groupEnd();
       toast({ title: "Success", description: `Removed ${percentage}% liquidity`, });

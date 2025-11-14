@@ -17,6 +17,7 @@ import { estimateExactInput, estimateExactOutput, quoteExactInputSingle, quoteEx
 import { swapExactInSingle } from "@/services/uniswap/v4/swapService";
 import { getTokenBalance, getNativeBalance } from "@/utils/erc20";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ZERO_ADDRESS } from "@/services/uniswap/v4/helpers";
 
 interface TokenPrice {
   usd: number;
@@ -51,7 +52,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const setFromToken = onSelectFromToken ?? setFromTokenState;
   const setToToken = onSelectToToken ?? setToTokenState;
   const { publicClient, walletClient } = useV4Provider();
-  const { currentNetwork, walletAddress } = useNetwork();
+  const { currentNetwork, walletAddress, balancesRefreshKey, setBalancesRefreshKey } = useNetwork();
 
   useEffect(() => {
     onTokensChange?.(fromToken, toToken);
@@ -70,6 +71,8 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const [fromBalance, setFromBalance] = useState<string | null>(null);
   const [toBalance, setToBalance] = useState<string | null>(null);
   const [loadingBalances, setLoadingBalances] = useState(false);
+  const [insufficientWarning, setInsufficientWarning] = useState<string | null>(null);
+  const [activePercent, setActivePercent] = useState<number | null>(null);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
 
   // Load pools to build token universe and adjacency mapping
@@ -79,11 +82,15 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     for (const p of pools) {
       if (p.token0?.id && p.token0?.symbol) {
         const addr = p.token0.id.toLowerCase();
+        const isHii = currentNetwork.chainId === 22469;
+        const isZero = addr === ZERO_ADDRESS.toLowerCase();
+        const symbol = isZero && isHii ? "HNC" : p.token0.symbol;
+        const name = isZero && isHii ? "HNC" : (p.token0.name || p.token0.symbol);
         if (!map.has(addr)) {
           map.set(addr, {
-            symbol: p.token0.symbol,
-            name: p.token0.name || p.token0.symbol,
-            logo: p.token0.symbol.substring(0, 1),
+            symbol,
+            name,
+            logo: symbol.substring(0, 1),
             address: addr,
             coingeckoId: "",
           });
@@ -91,15 +98,32 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       }
       if (p.token1?.id && p.token1?.symbol) {
         const addr = p.token1.id.toLowerCase();
+        const isHii = currentNetwork.chainId === 22469;
+        const isZero = addr === ZERO_ADDRESS.toLowerCase();
+        const symbol = isZero && isHii ? "HNC" : p.token1.symbol;
+        const name = isZero && isHii ? "HNC" : (p.token1.name || p.token1.symbol);
         if (!map.has(addr)) {
           map.set(addr, {
-            symbol: p.token1.symbol,
-            name: p.token1.name || p.token1.symbol,
-            logo: p.token1.symbol.substring(0, 1),
+            symbol,
+            name,
+            logo: symbol.substring(0, 1),
             address: addr,
             coingeckoId: "",
           });
         }
+      }
+    }
+    // Bổ sung native HNC cho Hii nếu chưa có trong danh sách
+    if (currentNetwork.chainId === 22469) {
+      const zero = ZERO_ADDRESS.toLowerCase();
+      if (!map.has(zero)) {
+        map.set(zero, {
+          symbol: "HNC",
+          name: "HNC",
+          logo: "H",
+          address: zero,
+          coingeckoId: "",
+        });
       }
     }
     return Array.from(map.values());
@@ -213,9 +237,34 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   // Quote using on-chain pool price when possible
   useEffect(() => {
     const runQuote = async () => {
-      if (!publicClient || !currentNetwork || !fromToken || !toToken) return;
+      // Allow fallback estimation even without network/provider
+      if (!fromToken || !toToken) return;
       const fromAddr = fromToken.address as `0x${string}`;
       const toAddr = toToken.address as `0x${string}`;
+
+      // If no client/network, perform Coingecko-based fallback when possible
+      if (!publicClient || !currentNetwork) {
+        try {
+          setQuoting(true);
+          if (isFromInput && fromAmount) {
+            const amt = parseFloat(fromAmount);
+            if (Number.isFinite(amt) && amt > 0 && exchangeRate && exchangeRate > 0) {
+              const calc = amt * exchangeRate;
+              setToAmount(calc.toFixed(6));
+            }
+          } else if (!isFromInput && toAmount) {
+            const amt = parseFloat(toAmount);
+            if (Number.isFinite(amt) && amt > 0 && exchangeRate && exchangeRate > 0) {
+              const calc = amt / exchangeRate;
+              setFromAmount(calc.toFixed(6));
+            }
+          }
+        } finally {
+          setQuoting(false);
+        }
+        return;
+      }
+      
 
       // Find tickSpacing from pools data (first matching pool), default 60
       const selected = selectedPoolId ? liquidPools.find((c) => c.id === selectedPoolId) : undefined;
@@ -373,7 +422,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       runQuote();
     }, 300);
     return () => clearTimeout(timeout);
-  }, [publicClient, currentNetwork, pools, fromToken, toToken, isFromInput, fromAmount, toAmount]);
+  }, [publicClient, currentNetwork, pools, fromToken, toToken, isFromInput, fromAmount, toAmount, exchangeRate]);
 
   // Load wallet balances for selected tokens
   useEffect(() => {
@@ -409,7 +458,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     };
 
     loadBalances();
-  }, [fromToken, toToken, walletAddress, currentNetwork?.rpcUrl]);
+  }, [fromToken, toToken, walletAddress, currentNetwork?.rpcUrl, balancesRefreshKey]);
 
   const formatBalance = (balance: string | null): string => {
     if (!balance) return "0.00";
@@ -440,29 +489,96 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     }
   };
 
+  // Insufficient balance/fee warning (English)
+  useEffect(() => {
+    const checkInsufficient = async () => {
+      setInsufficientWarning(null);
+      if (!walletAddress || !fromToken) return;
+      const amt = parseFloat(fromAmount || "0");
+      if (!Number.isFinite(amt) || amt <= 0) return;
+      const balNum = parseFloat(fromBalance || "0");
+      if (!Number.isFinite(balNum)) return;
+
+      const isNative = isNativeAddress(fromToken.address);
+      if (!isNative) {
+        if (amt > balNum) setInsufficientWarning("Insufficient balance for the entered amount.");
+        return;
+      }
+      // Native: reserve gas fee
+      try {
+        const reserve = await estimateNativeGasReserve();
+        const maxSpendable = Math.max(0, balNum - reserve);
+        if (maxSpendable <= 0) {
+          setInsufficientWarning("Insufficient native balance to cover gas fees.");
+          return;
+        }
+        if (amt > maxSpendable) {
+          setInsufficientWarning(`Amount exceeds balance after reserving gas (~${reserve.toFixed(4)}).`);
+        }
+      } catch {
+        // nếu ước lượng lỗi, không chặn mà để service tự điều chỉnh
+      }
+    };
+    checkInsufficient();
+  }, [walletAddress, fromToken?.address, fromAmount, fromBalance]);
+
+  // Detect active percent selection based on current amount and balance
+  useEffect(() => {
+    const detectActive = async () => {
+      setActivePercent(null);
+      if (!walletAddress || !fromToken || !fromBalance) return;
+      const amt = parseFloat(fromAmount || "0");
+      if (!Number.isFinite(amt) || amt <= 0) return;
+      const bal = parseFloat(fromBalance);
+      if (!Number.isFinite(bal) || bal <= 0) return;
+      const isNative = isNativeAddress(fromToken.address);
+      let available = bal;
+      if (isNative) {
+        try {
+          const reserve = await estimateNativeGasReserve();
+          available = Math.max(0, bal - reserve);
+        } catch {}
+      }
+      const options = [0.25, 0.5, 0.75, 1];
+      for (const p of options) {
+        const raw = bal * p;
+        const target = isNative ? Math.min(raw, available) : raw;
+        const tolerance = Math.max(1e-6, target * 0.005); // 0.5% tolerance
+        if (Math.abs(amt - target) <= tolerance) {
+          setActivePercent(p);
+          return;
+        }
+      }
+    };
+    detectActive();
+  }, [walletAddress, fromToken?.address, fromBalance, fromAmount]);
+
   // Áp dụng chọn nhanh phần trăm số dư cho fromAmount
   const applyFromQuickSelect = async (percent: number) => {
     if (!walletAddress || !fromToken) {
-      toast.error("Vui lòng kết nối ví và chọn token");
+      toast.error("Please connect your wallet and select a token.");
       return;
     }
     if (!fromBalance) {
-      toast.error("Chưa tải được số dư");
+      toast.error("Failed to load balance.");
       return;
     }
     const bal = parseFloat(fromBalance);
     if (!(Number.isFinite(bal) && bal > 0)) {
-      toast.error("Số dư không đủ");
+      toast.error("Insufficient balance.");
       return;
     }
-    let amount = bal * percent;
-    // Trường hợp đặc biệt: 100% native -> trừ phí gas ước tính
-    if (percent === 1 && isNativeAddress(fromToken.address)) {
-      const gasReserve = await estimateNativeGasReserve();
-      amount = Math.max(0, bal - gasReserve);
+    const isNative = isNativeAddress(fromToken.address);
+    const gasReserve = isNative ? await estimateNativeGasReserve() : 0;
+    const spendable = isNative ? Math.max(0, bal - gasReserve) : bal;
+    let amount = Math.min(bal * percent, spendable);
+    if (isNative && amount <= 0) {
+      setInsufficientWarning("Insufficient native balance to cover gas fees.");
     }
     setIsFromInput(true);
-    setFromAmount(amount > 0 ? amount.toFixed(6) : "");
+    // Always show the computed amount, even if it's 0
+    setFromAmount(amount > 0 ? amount.toFixed(6) : "0");
+    setActivePercent(percent);
   };
 
   // Chuẩn hóa chuỗi số thập phân: thay ',' bằng '.', loại bỏ ký tự không hợp lệ
@@ -546,6 +662,8 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       setTxHash(hash);
       setTxStatus("success");
       toast.success(`Swap completed! Tx: ${hash ?? ""}`);
+      // Reload balances after successful swap
+      setBalancesRefreshKey((k) => k + 1);
       setFromAmount("");
       setToAmount("");
     } catch (err: any) {
@@ -618,9 +736,14 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
                   ? 'Loading...'
                   : walletAddress
                     ? `Balance: ${formatBalance(fromBalance)}`
-                    : 'Connect wallet'}
+                    : 'Connect wallet to see balance'}
             </span>
           </div>
+          {insufficientWarning && (
+            <div className="mb-2 p-2 rounded-lg bg-amber-100/10 border border-amber-200/50 text-amber-600 dark:text-amber-400 text-xs">
+              {insufficientWarning}
+            </div>
+          )}
           <div className="flex items-center gap-3">
             <Input
               type="text"
@@ -643,8 +766,10 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
           )}
           {walletAddress && fromBalance && (
             <div className="mt-2 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => applyFromQuickSelect(0.5)}>50%</Button>
-              <Button variant="outline" size="sm" onClick={() => applyFromQuickSelect(1)}>100%</Button>
+              <Button variant={activePercent===0.25?"default":"outline"} size="sm" onClick={() => applyFromQuickSelect(0.25)}>25%</Button>
+              <Button variant={activePercent===0.5?"default":"outline"} size="sm" onClick={() => applyFromQuickSelect(0.5)}>50%</Button>
+              <Button variant={activePercent===0.75?"default":"outline"} size="sm" onClick={() => applyFromQuickSelect(0.75)}>75%</Button>
+              <Button variant={activePercent===1?"default":"outline"} size="sm" onClick={() => applyFromQuickSelect(1)}>100%</Button>
             </div>
           )}
           {fromToken && prices?.[fromToken.coingeckoId]?.usd && (
@@ -660,7 +785,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
             variant="ghost"
             size="icon"
             onClick={switchTokens}
-            disabled={!walletAddress || !fromToken || !toToken}
+            disabled={!fromToken || !toToken}
             className="h-10 w-10 rounded-xl bg-card border border-glass hover:bg-muted/50 transition-all hover:rotate-180 disabled:opacity-50"
           >
             <ArrowUpDown className="h-5 w-5" />
@@ -678,7 +803,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
                   ? 'Loading...'
                   : walletAddress
                     ? `Balance: ${formatBalance(toBalance)}`
-                    : 'Connect wallet'}
+                    : 'Connect wallet to see balance'}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -738,7 +863,18 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
 
       <Button 
         onClick={handleSwap}
-        disabled={!walletAddress || !fromToken || !toToken || !fromAmount || pricesLoading || quoting}
+        disabled={
+          !walletAddress ||
+          !fromToken ||
+          !toToken ||
+          (isFromInput
+            ? !(Number.isFinite(parseFloat(fromAmount || "")) && parseFloat(fromAmount || "") > 0)
+            : !(Number.isFinite(parseFloat(toAmount || "")) && parseFloat(toAmount || "") > 0)
+          ) ||
+          pricesLoading ||
+          quoting ||
+          !!insufficientWarning
+        }
         className="w-full mt-4 h-14 text-lg font-semibold bg-gradient-primary hover:opacity-90 transition-opacity disabled:opacity-50"
       >
         {quoting

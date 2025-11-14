@@ -17,8 +17,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useV4Provider } from "@/hooks/useV4Provider";
 import { fetchPool, Pool as GraphPool } from "@/services/graphql/subgraph";
-import { getPositionDetails, V4PositionDetails, estimatePositionAmounts, estimateUnclaimedFees, collectFeesFromPosition } from "@/services/uniswap/v4/positionService";
+import { getCommonTokens } from "@/config/uniswap";
+import { getPositionDetails, V4PositionDetails, estimatePositionAmounts, estimateUnclaimedFees, collectFeesFromPosition, verifyFeeCollection, invalidatePositionCaches } from "@/services/uniswap/v4/positionService";
 import { Input } from "@/components/ui/input";
+import { TxStatusDialog } from "@/components/ui/TxStatusDialog";
+import { ZERO_ADDRESS } from "@/services/uniswap/v4/helpers";
 
 // Helper functions for positions
 const formatFeeTier = (tickSpacing: string): string => {
@@ -53,15 +56,100 @@ const Pools = () => {
   const [removeLabel, setRemoveLabel] = useState<string | undefined>(undefined);
   const { pools, isLoading, error } = useSubgraphPools();
   const { positions, isLoading: positionsLoading, error: positionsError } = useSubgraphPositions();
-  const { walletAddress } = useNetwork();
+  const { walletAddress, currentNetwork, setBalancesRefreshKey } = useNetwork();
   const { publicClient, walletClient, chain } = useV4Provider();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  // --- USD pricing helpers (default each token = $1) ---
-  const getTokenUSDPrice = (_tokenId: string) => 1;
+  // --- Pagination states ---
+  const [poolPage, setPoolPage] = useState(0);
+  const [poolPageSize, setPoolPageSize] = useState(10);
+  const [posPage, setPosPage] = useState(0);
+  const [posPageSize, setPosPageSize] = useState(5);
+
+  // --- USD pricing helpers using subgraph pools to route via HNC/USDT/USDC ---
+  const baseUSDT = (import.meta.env.VITE_USDT_ADDRESS as string | undefined);
+  const baseUSDC = (import.meta.env.VITE_USDC_ADDRESS as string | undefined);
+  const baseHNC = (import.meta.env.VITE_NATIVE_TOKEN_ADDRESS as string | undefined);
+  const common = currentNetwork?.chainId ? getCommonTokens(currentNetwork.chainId) : {} as any;
+  const usdtCand = pools.flatMap(p => [p.token0, p.token1]).filter(t => t?.symbol === "USDT").map(t => t.id.toLowerCase());
+  const usdcCand = pools.flatMap(p => [p.token0, p.token1]).filter(t => t?.symbol === "USDC").map(t => t.id.toLowerCase());
+  const hncCand  = pools.flatMap(p => [p.token0, p.token1]).filter(t => ["HNC","WHNC","WETH","WBNB"].includes(String(t?.symbol))).map(t => t.id.toLowerCase());
+  const USDT = (baseUSDT || (common?.USDT as string | undefined) || usdtCand[0])?.toLowerCase();
+  const USDC = (baseUSDC || (common?.USDC as string | undefined) || usdcCand[0])?.toLowerCase();
+  const HNC  = (baseHNC  || (common?.WETH || common?.WBNB) || hncCand[0])?.toLowerCase();
+
+  const getTokenUSDPrice = (_tokenId?: string) => {
+    if (!_tokenId) return NaN;
+    const addr = _tokenId.toLowerCase();
+    const addrSymbol: Record<string, string> = {};
+    pools.forEach((p) => {
+      addrSymbol[p.token0.id.toLowerCase()] = String(p.token0.symbol || "");
+      addrSymbol[p.token1.id.toLowerCase()] = String(p.token1.symbol || "");
+    });
+    const STABLE = new Set(["USDT", "USDC", "BUSD"]);
+    const symSelf = addrSymbol[addr];
+    if (symSelf && STABLE.has(symSelf)) return 1;
+    // Direct to USDT/USDC
+    const directPool = pools.find((p) => {
+      const a0 = p.token0.id.toLowerCase();
+      const a1 = p.token1.id.toLowerCase();
+      const s0 = String(p.token0.symbol || "");
+      const s1 = String(p.token1.symbol || "");
+      return (a0 === addr && STABLE.has(s1)) || (a1 === addr && STABLE.has(s0));
+    });
+    if (directPool && directPool.tick != null) {
+      const d0 = Number(directPool.token0.decimals || "18");
+      const d1 = Number(directPool.token1.decimals || "18");
+      const tick = Number(directPool.tick);
+      const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+      const a0 = directPool.token0.id.toLowerCase();
+      const isToken0Target = a0 === addr;
+      const s0 = String(directPool.token0.symbol || "");
+      const s1 = String(directPool.token1.symbol || "");
+      if (isToken0Target && STABLE.has(s1)) return ratio;
+      if (!isToken0Target && STABLE.has(s0)) return 1 / ratio;
+    }
+    // Via HNC
+    const priceOfBase = (base?: string): number | null => {
+      const b = base?.toLowerCase();
+      if (!b) return null;
+      const targetPool = pools.find((p) => {
+        const a0 = p.token0.id.toLowerCase();
+        const a1 = p.token1.id.toLowerCase();
+        const s0 = String(p.token0.symbol || "");
+        const s1 = String(p.token1.symbol || "");
+        return (a0 === b && STABLE.has(s1)) || (a1 === b && STABLE.has(s0));
+      });
+      if (!targetPool || targetPool.tick == null) return null;
+      const d0 = Number(targetPool.token0.decimals || "18");
+      const d1 = Number(targetPool.token1.decimals || "18");
+      const tick = Number(targetPool.tick);
+      const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+      const a0 = targetPool.token0.id.toLowerCase();
+      const isBaseToken0 = a0 === b;
+      const baseInStable = isBaseToken0 ? (1 / ratio) : ratio;
+      return baseInStable;
+    };
+    const baseUSD = priceOfBase(HNC || USDT || USDC);
+    if (HNC && baseUSD != null) {
+      const poolToHNC = pools.find(p => [p.token0.id.toLowerCase(), p.token1.id.toLowerCase()].includes(addr) && [p.token0.id.toLowerCase(), p.token1.id.toLowerCase()].includes(HNC));
+      if (poolToHNC && poolToHNC.tick != null) {
+        const d0 = Number(poolToHNC.token0.decimals || "18");
+        const d1 = Number(poolToHNC.token1.decimals || "18");
+        const tick = Number(poolToHNC.tick);
+        const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1);
+        const a0 = poolToHNC.token0.id.toLowerCase();
+        const isToken0Target = a0 === addr;
+        const priceInHNC = isToken0Target ? (1 / ratio) : ratio;
+        return priceInHNC * baseUSD;
+      }
+    }
+    return NaN;
+  };
 
   const formatUSD = (amount: number) => {
+    if (!Number.isFinite(amount)) return "N/A";
     if (amount >= 1e9) return `$${(amount / 1e9).toFixed(2)}B`;
     if (amount >= 1e6) return `$${(amount / 1e6).toFixed(2)}M`;
     if (amount >= 1e3) return `$${(amount / 1e3).toFixed(2)}K`;
@@ -73,12 +161,16 @@ const Pools = () => {
       const v = parseFloat(pool.volumeUSD);
       if (!Number.isNaN(v) && v > 0) return v;
     }
-    // Fallback: derive from token volumes assuming $1 per token
+    // Fallback: derive from token volumes using derived token prices
     const vol0 = parseFloat(pool.volumeToken0 || "0");
     const vol1 = parseFloat(pool.volumeToken1 || "0");
     const p0 = getTokenUSDPrice(pool.token0?.id);
     const p1 = getTokenUSDPrice(pool.token1?.id);
-    return vol0 * p0 + vol1 * p1;
+    const hasPrices = Number.isFinite(p0) || Number.isFinite(p1);
+    if (!hasPrices) return NaN;
+    const e0 = Number.isFinite(p0) ? vol0 * p0 : 0;
+    const e1 = Number.isFinite(p1) ? vol1 * p1 : 0;
+    return e0 + e1;
   };
 
   // Compute TVL(USD) from actual token amounts in the pool; do not use raw liquidity.
@@ -87,22 +179,36 @@ const Pools = () => {
       const v = parseFloat(pool.totalValueLockedUSD);
       if (!Number.isNaN(v) && v > 0) return v;
     }
-    // Fallback: estimate TVL from token balances assuming $1 per token
+    // Fallback: estimate TVL from token balances using derived token prices
     const tvl0 = parseFloat(pool.totalValueLockedToken0 || "0");
     const tvl1 = parseFloat(pool.totalValueLockedToken1 || "0");
     const p0 = getTokenUSDPrice(pool.token0?.id);
     const p1 = getTokenUSDPrice(pool.token1?.id);
-    const est = tvl0 * p0 + tvl1 * p1;
-    if (est > 0) return est;
-    // If token balances are unavailable, return 0 rather than using raw liquidity.
-    return 0;
+    const hasPrices = Number.isFinite(p0) || Number.isFinite(p1);
+    if (!hasPrices) return NaN;
+    const e0 = Number.isFinite(p0) ? tvl0 * p0 : 0;
+    const e1 = Number.isFinite(p1) ? tvl1 * p1 : 0;
+    const est = e0 + e1;
+    if (Number.isFinite(est) && est > 0) return est;
+    return NaN;
   };
 
-  // Calculate total stats from pools (USD)
-  const totalLiquidity = pools.reduce((acc, pool) => acc + computeLiquidityUSD(pool), 0);
-  const totalVolume = pools.reduce((acc, pool) => acc + computeVolumeUSD(pool), 0);
+  // Calculate total stats from pools (USD) — treat N/A as 0
+  const totalLiquidity = pools.reduce((acc, pool) => {
+    const v = computeLiquidityUSD(pool);
+    return acc + (Number.isFinite(v) ? v : 0);
+  }, 0);
+  const totalVolume = pools.reduce((acc, pool) => {
+    const v = computeVolumeUSD(pool);
+    return acc + (Number.isFinite(v) ? v : 0);
+  }, 0);
 
-  // --- My Positions: load on-chain details (V4) ---
+  // --- Search & Sort state ---
+  const [searchQuery, setSearchQuery] = useState("");
+  type SortKey = "newest" | "pair" | "fee" | "liquidity" | "volume" | "apr" | "tx";
+  const [sortBy, setSortBy] = useState<SortKey>("newest");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+
   const tokenIds = positions.map(p => BigInt(p.tokenId)).filter(Boolean);
   // React Query requires a serializable queryKey; BigInt cannot be JSON.stringified.
   // Use string representations of tokenIds in the key to avoid hashing errors.
@@ -113,25 +219,30 @@ const Pools = () => {
       if (!publicClient || !chain) return {};
       console.groupCollapsed("🔎 Pools/MyPositions: fetch details");
       console.debug("chainId:", chain.id, "tokenIds:", tokenIds.map(id => id.toString()));
-      const entries = await Promise.all(
-        tokenIds.map(async (id) => {
-          const details = await getPositionDetails(publicClient, chain.id, id);
-          if (!details) {
-            console.warn("MyPositions: getPositionDetails returned null", { tokenId: id.toString() });
-          } else {
-            console.debug("detail:", {
-              tokenId: id.toString(),
-              token0: details.token0.symbol,
-              token1: details.token1.symbol,
-              fee: details.poolKey.fee,
-              tickLower: details.tickLower,
-              tickUpper: details.tickUpper,
-              currentTick: details.currentTick,
-            });
-          }
-          return details ? [id.toString(), details] as const : null;
-        })
-      );
+      const limit = 6;
+      const tasks = tokenIds.map((id) => async () => {
+        const details = await getPositionDetails(publicClient, chain.id, id);
+        if (!details) {
+          console.warn("MyPositions: getPositionDetails returned null", { tokenId: id.toString() });
+        } else {
+          console.debug("detail:", {
+            tokenId: id.toString(),
+            token0: details.token0.symbol,
+            token1: details.token1.symbol,
+            fee: details.poolKey.fee,
+            tickLower: details.tickLower,
+            tickUpper: details.tickUpper,
+            currentTick: details.currentTick,
+          });
+        }
+        return details ? [id.toString(), details] as const : null;
+      });
+      const entries: (readonly [string, V4PositionDetails] | null)[] = [];
+      for (let i = 0; i < tasks.length; i += limit) {
+        const batch = tasks.slice(i, i + limit).map((fn) => fn());
+        const res = await Promise.all(batch);
+        entries.push(...res);
+      }
       const map: Record<string, V4PositionDetails> = {};
       for (const e of entries) {
         if (e) map[e[0]] = e[1];
@@ -166,6 +277,22 @@ const Pools = () => {
     staleTime: 30000,
   });
 
+  const matchesPositionSearch = (position: any) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const pool = position.poolId ? poolsMap?.[position.poolId] : undefined;
+    const fields = [
+      position.tokenId,
+      pool?.token0?.symbol,
+      pool?.token1?.symbol,
+      pool?.token0?.id,
+      pool?.token1?.id,
+    ].filter(Boolean).map((s: string) => s.toLowerCase());
+    return fields.some((f: string) => f.includes(q));
+  };
+  const filteredPositions = positions.filter(matchesPositionSearch);
+  const visiblePositions = filteredPositions.slice(posPage * posPageSize, (posPage + 1) * posPageSize);
+
   // Estimate full-position token amounts for display in My Positions tab
   const tokenIdsForPositionsTab = positions.map(p => BigInt(p.tokenId)).filter(Boolean);
   const tokenIdsForPositionsTabKeys = tokenIdsForPositionsTab.map((id) => id.toString());
@@ -176,16 +303,21 @@ const Pools = () => {
     queryKey: ["v4-position-amounts-tab", chain?.id, tokenIdsForPositionsTabKeys],
     queryFn: async () => {
       if (!publicClient || !chain) return {};
-      const entries = await Promise.all(
-        tokenIdsForPositionsTab.map(async (id) => {
-          const res = await estimatePositionAmounts(publicClient, chain.id, id);
-          if (!res) return null;
-          return [id.toString(), {
-            token0: { symbol: res.token0.symbol, estimate: res.token0.estimate },
-            token1: { symbol: res.token1.symbol, estimate: res.token1.estimate },
-          }] as const;
-        })
-      );
+      const limit = 6;
+      const tasks = tokenIdsForPositionsTab.map((id) => async () => {
+        const res = await estimatePositionAmounts(publicClient, chain.id, id);
+        if (!res) return null;
+        return [id.toString(), {
+          token0: { symbol: res.token0.symbol, estimate: res.token0.estimate },
+          token1: { symbol: res.token1.symbol, estimate: res.token1.estimate },
+        }] as const;
+      });
+      const entries: (readonly [string, { token0: { symbol: string; estimate: string }; token1: { symbol: string; estimate: string } }] | null)[] = [];
+      for (let i = 0; i < tasks.length; i += limit) {
+        const batch = tasks.slice(i, i + limit).map((fn) => fn());
+        const res = await Promise.all(batch);
+        entries.push(...res);
+      }
       const map: Record<string, { token0: { symbol: string; estimate: string }; token1: { symbol: string; estimate: string } }> = {};
       for (const e of entries) {
         if (e) map[e[0]] = e[1];
@@ -204,16 +336,21 @@ const Pools = () => {
     queryKey: ["v4-position-fees", chain?.id, tokenIdsForPositionsTabKeys],
     queryFn: async () => {
       if (!publicClient || !chain) return {};
-      const entries = await Promise.all(
-        tokenIdsForPositionsTab.map(async (id) => {
-          const res = await estimateUnclaimedFees(publicClient, chain.id, id, walletAddress as `0x${string}`);
-          if (!res) return null;
-          return [id.toString(), {
-            token0: { symbol: res.token0.symbol, amount: res.token0.amount },
-            token1: { symbol: res.token1.symbol, amount: res.token1.amount },
-          }] as const;
-        })
-      );
+      const limit = 6;
+      const tasks = tokenIdsForPositionsTab.map((id) => async () => {
+        const res = await estimateUnclaimedFees(publicClient, chain.id, id, walletAddress as `0x${string}`);
+        if (!res) return null;
+        return [id.toString(), {
+          token0: { symbol: res.token0.symbol, amount: res.token0.amount },
+          token1: { symbol: res.token1.symbol, amount: res.token1.amount },
+        }] as const;
+      });
+      const entries: (readonly [string, { token0: { symbol: string; amount: string }; token1: { symbol: string; amount: string } }] | null)[] = [];
+      for (let i = 0; i < tasks.length; i += limit) {
+        const batch = tasks.slice(i, i + limit).map((fn) => fn());
+        const res = await Promise.all(batch);
+        entries.push(...res);
+      }
       const map: Record<string, { token0: { symbol: string; amount: string }; token1: { symbol: string; amount: string } }> = {};
       for (const e of entries) {
         if (e) map[e[0]] = e[1];
@@ -228,6 +365,12 @@ const Pools = () => {
 
   // Mutation: Claim fees for a position
   const { toast } = useToast();
+  const [claimingTokenId, setClaimingTokenId] = useState<bigint | null>(null);
+  const [txOpen, setTxOpen] = useState(false);
+  const [txStatus, setTxStatus] = useState<"loading" | "success" | "error">("loading");
+  const [txTitle, setTxTitle] = useState<string | undefined>(undefined);
+  const [txDesc, setTxDesc] = useState<string | undefined>(undefined);
+  const [txHash, setTxHash] = useState<string | undefined>(undefined);
   const claimMutation = useMutation({
     mutationFn: async (vars: { tokenId: bigint }) => {
       if (!publicClient || !chain) throw new Error("Provider not ready");
@@ -235,16 +378,51 @@ const Pools = () => {
       if (!walletClient) throw new Error("Wallet client unavailable");
       return collectFeesFromPosition(publicClient, walletClient, chain.id, walletAddress as `0x${string}`, vars.tokenId);
     },
-    onSuccess: async () => {
+    onSuccess: async (res) => {
+      const tid = claimingTokenId ?? null;
+      if (tid && chain?.id) invalidatePositionCaches(chain.id, tid);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["v4-position-fees", chain?.id, tokenIdsForPositionsTabKeys] }),
         queryClient.invalidateQueries({ queryKey: ["v4-position-amounts-tab", chain?.id, tokenIdsForPositionsTabKeys] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-fees-page"] }),
+        queryClient.invalidateQueries({ queryKey: ["v4-position-amounts-page"] }),
       ]);
-      toast({ title: "Claimed fees", description: "Transaction sent" });
+      const tidStr = claimingTokenId?.toString();
+      let actual: string | undefined = undefined;
+      try {
+        if (tidStr && publicClient && chain) {
+          const details = detailsMap?.[tidStr] ?? await getPositionDetails(publicClient, chain.id, BigInt(tidStr));
+          if (details && res?.txHash) {
+            const verified = await verifyFeeCollection(
+              publicClient,
+              chain.id,
+              res.txHash as `0x${string}`,
+              walletAddress as `0x${string}`,
+              details.token0.address,
+              details.token1.address
+            );
+            actual = `${verified.token0.amount} ${verified.token0.symbol} / ${verified.token1.amount} ${verified.token1.symbol}`;
+          }
+        }
+      } catch {}
+      setTxStatus("success");
+      setTxTitle("Fees claimed");
+      setTxDesc(actual ? `Collected: ${actual}` : "Fees claimed successfully.");
+      setTxHash(res?.txHash);
+      setClaimingTokenId(null);
+      setBalancesRefreshKey((k) => k + 1);
+      setTxOpen(true);
     },
     onError: (err: any) => {
       const msg = err?.shortMessage || err?.message || "Failed to claim fees";
-      toast({ title: "Claim failed", description: msg, variant: "destructive" });
+      setTxStatus("error");
+      setTxTitle("Claim failed");
+      setTxDesc(msg);
+      setTxHash(undefined);
+      setClaimingTokenId(null);
+      setTxOpen(true);
       console.error("Claim fees error:", err);
     },
   });
@@ -269,12 +447,6 @@ const Pools = () => {
     return `${aprRaw.toFixed(2)}%`;
   };
 
-  // --- Search & Sort state ---
-  const [searchQuery, setSearchQuery] = useState("");
-  type SortKey = "newest" | "pair" | "fee" | "liquidity" | "volume" | "apr" | "tx";
-  const [sortBy, setSortBy] = useState<SortKey>("newest");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-
   const toggleSort = (key: SortKey) => {
     if (sortBy === key) {
       setSortOrder(sortOrder === "asc" ? "desc" : "asc");
@@ -284,14 +456,21 @@ const Pools = () => {
     }
   };
 
+  const normalizeSymbol = (addr?: string, sym?: string) => {
+    if (currentNetwork.chainId === 22469 && addr?.toLowerCase() === ZERO_ADDRESS.toLowerCase()) return "HNC";
+    return sym ?? "";
+  };
+
   const matchesSearch = (pool: any) => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return true;
     const fields = [
       pool.token0?.symbol,
+      normalizeSymbol(pool.token0?.id, pool.token0?.symbol),
       pool.token0?.name,
       pool.token0?.id,
       pool.token1?.symbol,
+      normalizeSymbol(pool.token1?.id, pool.token1?.symbol),
       pool.token1?.name,
       pool.token1?.id,
     ]
@@ -314,7 +493,7 @@ const Pools = () => {
     return spacing * 50; // generic fallback
   };
 
-  const getPairLabel = (pool: any) => `${pool.token0.symbol}/${pool.token1.symbol}`;
+  const getPairLabel = (pool: any) => `${normalizeSymbol(pool.token0?.id, pool.token0?.symbol)}/${normalizeSymbol(pool.token1?.id, pool.token1?.symbol)}`;
 
   const displayPools = pools
     .filter(matchesSearch)
@@ -511,8 +690,10 @@ const Pools = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {displayPools.map((pool) => {
-                    const pair = `${pool.token0.symbol}/${pool.token1.symbol}`;
+                  {displayPools.slice(poolPage * poolPageSize, (poolPage + 1) * poolPageSize).map((pool) => {
+                    const sym0 = normalizeSymbol(pool.token0?.id, pool.token0?.symbol);
+                    const sym1 = normalizeSymbol(pool.token1?.id, pool.token1?.symbol);
+                    const pair = `${sym0}/${sym1}`;
                     // Prefer subgraph's feeTier; fallback to tickSpacing heuristic only if missing
                     const feeTier = pool.feeTier
                       ? `${(Number(pool.feeTier) / 10_000).toFixed(2)}%`
@@ -528,12 +709,12 @@ const Pools = () => {
                             <div className="flex -space-x-2">
                               <div className="w-8 h-8 rounded-full bg-gradient-primary flex items-center justify-center border-2 border-card">
                                 <span className="text-xs font-bold">
-                                  {pool.token0.symbol.substring(0, 1)}
+                                  {sym0.substring(0, 1)}
                                 </span>
                               </div>
                               <div className="w-8 h-8 rounded-full bg-gradient-secondary flex items-center justify-center border-2 border-card">
                                 <span className="text-xs font-bold">
-                                  {pool.token1.symbol.substring(0, 1)}
+                                  {sym1.substring(0, 1)}
                                 </span>
                               </div>
                             </div>
@@ -604,8 +785,10 @@ const Pools = () => {
             </div>
             {/* Mobile/Card view */}
             <div className="md:hidden p-2 space-y-3">
-              {displayPools.map((pool) => {
-                const pair = `${pool.token0.symbol}/${pool.token1.symbol}`;
+              {displayPools.slice(poolPage * poolPageSize, (poolPage + 1) * poolPageSize).map((pool) => {
+                const sym0 = normalizeSymbol(pool.token0?.id, pool.token0?.symbol);
+                const sym1 = normalizeSymbol(pool.token1?.id, pool.token1?.symbol);
+                const pair = `${sym0}/${sym1}`;
                 const feeTier = pool.feeTier
                   ? `${(Number(pool.feeTier) / 10_000).toFixed(2)}%`
                   : `${(parseInt(pool.tickSpacing) / 10).toFixed(2)}%`;
@@ -635,12 +818,12 @@ const Pools = () => {
                         <div className="flex -space-x-2">
                           <div className="w-8 h-8 rounded-full bg-gradient-primary flex items-center justify-center border-2 border-card">
                             <span className="text-xs font-bold">
-                              {pool.token0.symbol.substring(0, 1)}
+                              {sym0.substring(0, 1)}
                             </span>
                           </div>
                           <div className="w-8 h-8 rounded-full bg-gradient-secondary flex items-center justify-center border-2 border-card">
                             <span className="text-xs font-bold">
-                              {pool.token1.symbol.substring(0, 1)}
+                              {sym1.substring(0, 1)}
                             </span>
                           </div>
                         </div>
@@ -709,6 +892,21 @@ const Pools = () => {
           </Card>
         )}
 
+        {/* Pools Pagination */}
+        {displayPools.length > 0 && (
+          <div className="mt-4 flex items-center justify-end gap-3">
+            <div className="text-sm text-muted-foreground">
+              Page {poolPage + 1} / {Math.max(1, Math.ceil(displayPools.length / poolPageSize))}
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setPoolPage(Math.max(0, poolPage - 1))} disabled={poolPage === 0} className="border-glass">
+              Prev
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setPoolPage(Math.min(Math.ceil(displayPools.length / poolPageSize) - 1, poolPage + 1))} disabled={(poolPage + 1) >= Math.ceil(displayPools.length / poolPageSize)} className="border-glass">
+              Next
+            </Button>
+          </div>
+        )}
+
         <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass">
             <div className="text-sm text-muted-foreground mb-1">Total Value Locked</div>
@@ -758,7 +956,7 @@ const Pools = () => {
                 )}
 
                     {/* Positions List */}
-                    {positions.length === 0 ? (
+            {visiblePositions.length === 0 ? (
                   <Card className="p-12 bg-card/80 backdrop-blur-xl border-glass text-center">
                     <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
                       <Coins className="h-8 w-8 text-muted-foreground" />
@@ -778,7 +976,7 @@ const Pools = () => {
                   </Card>
         ) : (
           <div className="space-y-4">
-            {positions.map((position) => {
+            {visiblePositions.map((position) => {
               const details = detailsMap?.[position.tokenId];
               const fallbackPool = position.poolId ? poolsMap?.[position.poolId] : undefined;
               const tokenPair = details
@@ -801,7 +999,6 @@ const Pools = () => {
               const positionValue = amountInfo
                 ? `~ ${formatUSD(usdTotal)} (${amt0.toFixed(6)} ${amountInfo.token0.symbol} / ${amt1.toFixed(6)} ${amountInfo.token1.symbol})`
                 : "-";
-              const feesEarned = "-"; // TODO: integrate subgraph earnings
               const apr = fallbackPool ? calculateAPR(fallbackPool) : "N/A";
               const priceRange = details ? "Custom range" : "";
               const toPrice = (tick: number) => Number(Math.pow(1.0001, tick)).toFixed(4);
@@ -821,7 +1018,7 @@ const Pools = () => {
                 <Card key={position.id} className="bg-card/80 backdrop-blur-xl border-glass overflow-hidden hover:border-primary/20 transition-colors">
                   <div className="p-6">
                     {/* Top Section */}
-                    <div className="flex items-center justify-between mb-6">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
                       <div className="flex items-center gap-4 flex-1">
                         {/* Token Icons */}
                         <div className="flex -space-x-3">
@@ -862,7 +1059,7 @@ const Pools = () => {
                       </div>
 
                       {/* Price Range Indicator */}
-                      <div className="flex items-center gap-2 min-w-[300px]">
+                      <div className="flex items-center gap-2 w-full md:min-w-[300px]">
                         <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                           <div 
                             className={cn(
@@ -876,14 +1073,23 @@ const Pools = () => {
                     </div>
 
                     {/* Bottom Stats Grid */}
-                    <div className="grid grid-cols-5 gap-6 pt-4 border-t border-glass">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 pt-4 border-t border-glass">
                       <div>
                         <div className="text-sm text-muted-foreground mb-1">Position</div>
-                        <div className="text-sm">{positionValue}</div>
+                        <div className="text-sm font-medium">
+                          {amountInfo ? (
+                            <>
+                              {formatUSD(usdTotal)}
+                              <span className="hidden sm:inline"> ({amt0.toFixed(4)} {amountInfo.token0.symbol} / {amt1.toFixed(4)} {amountInfo.token1.symbol})</span>
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </div>
                       </div>
                       
                       <div>
-                        <div className="text-sm text-muted-foreground mb-1">Fees</div>
+                        <div className="text-sm text-muted-foreground mb-1">Claimable Fees</div>
                         <div className="text-sm">
                           {feesLoading ? (
                             <div className="flex items-center gap-2 text-muted-foreground">
@@ -899,8 +1105,9 @@ const Pools = () => {
                               const p1 = getTokenUSDPrice(details?.token1.address ?? fallbackPool?.token1.id);
                               const usd = (f0 * p0) + (f1 * p1);
                               return (
-                                <div className="text-sm">
-                                  ~ {formatUSD(usd)} ({f0.toFixed(6)} {feesInfo.token0.symbol} / {f1.toFixed(6)} {feesInfo.token1.symbol})
+                                <div className="text-sm font-medium">
+                                  {formatUSD(usd)}
+                                  <span className="hidden sm:inline"> ({f0.toFixed(4)} {feesInfo.token0.symbol} / {f1.toFixed(4)} {feesInfo.token1.symbol})</span>
                                 </div>
                               );
                             })()
@@ -929,12 +1136,24 @@ const Pools = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-end justify-end gap-2">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-end justify-start md:justify-end gap-2 col-span-1 sm:col-span-2 md:col-span-1 mt-2 sm:mt-0">
                         <Button
                           variant="secondary"
-                          onClick={() => claimMutation.mutate({ tokenId: BigInt(position.tokenId) })}
+                          onClick={() => {
+                            const tid = BigInt(position.tokenId);
+                            setClaimingTokenId(tid);
+                            setTxOpen(true);
+                            setTxStatus("loading");
+                            setTxTitle("Claiming fees");
+                            setTxDesc(`Submitting claim for position #${position.tokenId}...`);
+                            setTxHash(undefined);
+                            claimMutation.mutate({ tokenId: tid });
+                          }}
                           disabled={(() => {
-                            if (!walletAddress || claimMutation.isPending) return true;
+                            if (!walletAddress) return true;
+                            if (claimMutation.isPending && claimingTokenId?.toString() === position.tokenId) return true;
+                            // Disable while fees are estimating/loading
+                            if (feesLoading) return true;
                             const feesInfo = feesMap?.[position.tokenId];
                             // Cho phép claim nếu không có ước lượng (feesInfo undefined)
                             if (!feesInfo) return false;
@@ -942,9 +1161,9 @@ const Pools = () => {
                             const f1 = parseFloat(feesInfo.token1.amount) || 0;
                             return (f0 === 0 && f1 === 0);
                           })()}
-                          className="min-w-[120px]"
+                          className="w-full sm:w-auto"
                         >
-                          {claimMutation.isPending ? (
+                          {claimMutation.isPending && claimingTokenId?.toString() === position.tokenId ? (
                             <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Claiming</span>
                           ) : (
                             <span>Claim Fees</span>
@@ -958,15 +1177,30 @@ const Pools = () => {
                             setRemoveOpen(true);
                           }}
                           disabled={!walletAddress}
+                          className="w-full sm:w-auto"
                         >
                           Remove
                         </Button>
                       </div>
+                      </div>
                     </div>
-                  </div>
-                </Card>
+                  </Card>
               );
             })}
+            {/* Positions Pagination */}
+            {filteredPositions.length > 0 && (
+              <div className="mt-4 flex items-center justify-end gap-3">
+                <div className="text-sm text-muted-foreground">
+                  Page {posPage + 1} / {Math.max(1, Math.ceil(filteredPositions.length / posPageSize))}
+                </div>
+                <Button variant="outline" size="sm" onClick={() => setPosPage(Math.max(0, posPage - 1))} disabled={posPage === 0} className="border-glass">
+                  Prev
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setPosPage(Math.min(Math.ceil(filteredPositions.length / posPageSize) - 1, posPage + 1))} disabled={(posPage + 1) >= Math.ceil(filteredPositions.length / posPageSize)} className="border-glass">
+                  Next
+                </Button>
+              </div>
+            )}
           </div>
         )}
               </>
@@ -982,13 +1216,22 @@ const Pools = () => {
         initialFee={addLiquidityPreset.fee}
       />
       {removeTokenId !== null && (
-        <RemoveLiquidityDialog
-          open={removeOpen}
-          onOpenChange={setRemoveOpen}
-          tokenId={removeTokenId as bigint}
-          tokenPairLabel={removeLabel}
+        <RemoveLiquidityDialog 
+          open={removeOpen} 
+          onOpenChange={setRemoveOpen} 
+          tokenId={removeTokenId as bigint} 
+          tokenPairLabel={removeLabel} 
         />
       )}
+      <TxStatusDialog
+        open={txOpen}
+        onOpenChange={setTxOpen}
+        status={txStatus}
+        title={txTitle}
+        description={txDesc}
+        chainId={chain?.id}
+        txHash={txHash}
+      />
       </div>
     </div>
   );

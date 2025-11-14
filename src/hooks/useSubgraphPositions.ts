@@ -9,11 +9,24 @@ export function useSubgraphPositions() {
     queryKey: ["subgraph-positions", walletAddress],
     queryFn: () => {
       if (!walletAddress) return Promise.resolve([]);
-      return fetchPositions(walletAddress, 100, 0);
+      const loadAll = async () => {
+        const page = 250;
+        let skip = 0;
+        const acc: Position[] = [];
+        while (true) {
+          const batch = await fetchPositions(walletAddress, page, skip);
+          if (!batch.length) break;
+          acc.push(...batch);
+          if (batch.length < page) break;
+          skip += batch.length;
+        }
+        return acc;
+      };
+      return loadAll();
     },
     enabled: !!walletAddress,
-    staleTime: 30000, // 30 seconds
-    refetchInterval: 60000, // Refetch every minute
+    staleTime: 30000,
+    refetchInterval: 60000,
   });
 
   return {
