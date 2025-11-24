@@ -1,4 +1,4 @@
-import { Address, decodeErrorResult } from "viem";
+import { Address, decodeErrorResult, keccak256 } from "viem";
 import { Token } from "@uniswap/sdk-core";
 import { Actions, V4Planner, SwapExactInSingle } from "@uniswap/v4-sdk";
 import { encodeAbiParameters } from "viem";
@@ -6,6 +6,8 @@ import { getUniswapV4Addresses, ERC20_ABI, PERMIT2_ABI, UNIVERSAL_ROUTER_ABI } f
 import { ZERO_ADDRESS, fetchTokenInfo, isNativeETH } from "./helpers";
 import { getPool } from "./poolService";
 import { quoteExactInputSingle, estimateExactInput } from "./quoteService";
+import { BigNumber } from "ethers";
+// removed unused imports to avoid Vite resolution errors
 
 interface SwapParams {
   publicClient: any;
@@ -317,5 +319,264 @@ export async function swapExactInSingle(params: SwapParams) {
     // Throw a concise, user-facing message so UI can display meaningful errors
     const wrapped = Object.assign(new Error(userMessage), { cause: err });
     throw wrapped;
+  }
+}
+
+interface LimitOrderParams {
+  publicClient: any;
+  walletClient: any;
+  chainId: number;
+  tokenIn: Address;
+  tokenOut: Address;
+  amountInHuman: number;
+  desiredPrice: number;
+  tickSpacing: number;
+  fee?: number;
+  recipient?: Address;
+  hooks?: Address;
+  ttlSeconds?: number;
+  account?: Address;
+}
+
+export async function createLimitOrder(params: LimitOrderParams) {
+  const { publicClient, walletClient, chainId, tokenIn, tokenOut, amountInHuman, desiredPrice, tickSpacing, fee, recipient, hooks = ZERO_ADDRESS as Address, ttlSeconds = 3600 } = params;
+  if (!publicClient || !walletClient) {
+    console.log("Step 0: Missing clients", { publicClient: !!publicClient, walletClient: !!walletClient });
+    throw new Error("Missing clients");
+  }
+  const addresses = getUniswapV4Addresses(chainId);
+  if (!addresses?.universalRouter) {
+    console.log("Step 0: Universal Router not configured", { chainId, addresses });
+    throw new Error("Universal Router not configured for chain");
+  }
+  console.group("🟦 Service/LimitOrder/createLimitOrder");
+  console.log("Step 0: Input params", { chainId, tokenIn, tokenOut, amountInHuman, desiredPrice, tickSpacing, fee, recipient, hooks, ttlSeconds });
+
+  console.log("Step 1: Fetch token info/start");
+  let tokenInInfo, tokenOutInfo;
+  try {
+    [tokenInInfo, tokenOutInfo] = await Promise.all([
+      fetchTokenInfo(publicClient, tokenIn),
+      fetchTokenInfo(publicClient, tokenOut),
+    ]);
+    console.log("Step 1: Fetch token info/success", { tokenInInfo, tokenOutInfo });
+  } catch (e) {
+    console.log("Step 1: Fetch token info/failed", e);
+    console.groupEnd();
+    throw e;
+  }
+  console.log("Step 2: Construct token objects/start");
+  const tokenA = new Token(chainId, tokenIn, tokenInInfo.decimals, tokenInInfo.symbol, tokenInInfo.name);
+  const tokenB = new Token(chainId, tokenOut, tokenOutInfo.decimals, tokenOutInfo.symbol, tokenOutInfo.name);
+  const token0IsA = tokenA.address.toLowerCase() < tokenB.address.toLowerCase();
+  const currency0 = token0IsA ? tokenA : tokenB;
+  const currency1 = token0IsA ? tokenB : tokenA;
+  const zeroForOne = tokenA.address.toLowerCase() === currency0.address.toLowerCase();
+  console.log("Step 2: Construct token objects/success", { tokenA: tokenA.address, tokenB: tokenB.address, token0IsA, zeroForOne });
+
+  console.log("Step 3: Resolve directions/start");
+  const inputCurrency = zeroForOne ? currency0.address : currency1.address;
+  const outputCurrency = zeroForOne ? currency1.address : currency0.address;
+  console.log("Step 3: Resolve directions/success", { inputCurrency, outputCurrency });
+  console.log("Step 4: Compute amountInWei/start");
+  const amountInWei = BigInt(Math.round(amountInHuman * Math.pow(10, tokenA.decimals)));
+  if (amountInWei <= 0n) {
+    console.log("Step 4: Compute amountInWei/failed", { amountInHuman, decimals: tokenA.decimals });
+    console.groupEnd();
+    throw new Error("Amount too small");
+  }
+  console.log("Step 4: Compute amountInWei/success", { amountInWei: amountInWei.toString() });
+
+  console.log("Step 5: Resolve payer/start");
+  let payer: Address | undefined = params.account;
+  if (!payer) {
+    try {
+      const addrs = await walletClient.getAddresses?.();
+      payer = (addrs && addrs[0]) as Address;
+      console.log("Step 5: Resolve payer/success", { payer });
+    } catch (e) {
+      console.log("Step 5: Resolve payer/failed", e);
+    }
+  }
+  if (!payer) {
+    console.groupEnd();
+    throw new Error("No connected account");
+  }
+
+  const isNativeInput = isNativeETH(inputCurrency as `0x${string}`);
+  console.log("Step 6: Allowance checks/start", { isNativeInput });
+  if (!isNativeInput) {
+    try {
+      const [allowanceErc20, routerAllowanceRaw] = await Promise.all([
+        publicClient.readContract({ address: inputCurrency as Address, abi: ERC20_ABI, functionName: "allowance", args: [payer, addresses.permit2 as Address] }),
+        publicClient.readContract({ address: addresses.permit2 as Address, abi: PERMIT2_ABI, functionName: "allowance", args: [payer, inputCurrency as Address, addresses.universalRouter as Address] }) as any,
+      ]);
+      const [routerAllowance] = routerAllowanceRaw as any;
+      console.log("Step 6: Allowance checks/read", { erc20: (allowanceErc20 as bigint).toString(), permit2: BigInt(routerAllowance).toString() });
+      if ((allowanceErc20 as bigint) < amountInWei) {
+        console.log("Step 6: Approve ERC20 -> Permit2/start");
+        await walletClient.writeContract({ account: payer, address: inputCurrency as Address, abi: ERC20_ABI, functionName: "approve", args: [addresses.permit2 as Address, BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")] });
+        console.log("Step 6: Approve ERC20 -> Permit2/success");
+      }
+      if (BigInt(routerAllowance) < amountInWei) {
+        const expiration = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+        console.log("Step 6: Approve Permit2 -> Router/start");
+        await walletClient.writeContract({ account: payer, address: addresses.permit2 as Address, abi: PERMIT2_ABI, functionName: "approve", args: [inputCurrency as Address, addresses.universalRouter as Address, BigInt("0xffffffffffffffffffffffffffffffffffffffff"), expiration] });
+        console.log("Step 6: Approve Permit2 -> Router/success");
+      }
+      console.log("Step 6: Allowance checks/success");
+    } catch (e) {
+      console.log("Step 6: Allowance checks/failed", e);
+      console.groupEnd();
+      throw e;
+    }
+  } else {
+    console.log("Step 6: Skipped (native input)");
+  }
+
+  console.log("Step 7: Resolve poolKey/start");
+  const TICK_TO_FEE: Record<number, number> = { 10: 500, 60: 3000, 200: 10000 };
+  const resolvedTick = tickSpacing;
+  const resolvedFee = (fee ?? TICK_TO_FEE[resolvedTick] ?? 3000) as number;
+  const poolKey = { currency0: currency0.address as Address, currency1: currency1.address as Address, fee: resolvedFee, tickSpacing: resolvedTick, hooks };
+  console.log("Step 7: Resolve poolKey/success", { poolKey });
+
+  console.log("Step 8: Compute amountOutMinimum/start");
+  const desiredOutHuman = amountInHuman * desiredPrice;
+  const amountOutMinimum = BigInt(Math.floor(desiredOutHuman * Math.pow(10, tokenB.decimals))).toString();
+  console.log("Step 8: Compute amountOutMinimum/success", { desiredOutHuman, amountOutMinimum });
+
+  console.log("Step 9: Build V4 actions/start");
+  const swapConfig: SwapExactInSingle = { poolKey, zeroForOne, amountIn: amountInWei.toString(), amountOutMinimum, hookData: "0x" };
+  const v4Planner = new V4Planner();
+  v4Planner.addAction(Actions.SWAP_EXACT_IN_SINGLE, [swapConfig]);
+  v4Planner.addAction(Actions.SETTLE_ALL, [inputCurrency, amountInWei.toString()]);
+  v4Planner.addAction(Actions.TAKE, [outputCurrency, recipient ?? payer, "0"]);
+  const encodedActions = v4Planner.finalize() as `0x${string}`;
+  console.log("Step 9: Build V4 actions/success", { encodedActionsLen: encodedActions.length, head: encodedActions.slice(0, 66) });
+
+  console.log("Step 10: Build UR commands/start");
+  let commands = "0x" as `0x${string}`;
+  const inputs: `0x${string}`[] = [];
+  commands = (commands + "10") as `0x${string}`;
+  inputs.push(encodedActions);
+  console.log("Step 10: Build UR commands/success", { commands, inputsCount: inputs.length });
+
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+
+  // Build RelayOrder using SDK
+  console.log("Step 11: Build RelayOrder with SDK/start");
+  
+  // Build RelayOrder (manual) and sign EIP-712
+  console.log("Step 11: Construct RelayOrder/start");
+  const RELAY_ORDER_REACTOR = (addresses as any).relayOrderReactor || (addresses.universalRouter as Address);
+  const FILLER_FEE_BPS = 200; // 2%
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const deadlineTs = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+  const fillerFeeAmount = (amountInWei * BigInt(FILLER_FEE_BPS)) / 10_000n;
+  const nonce = now * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000));
+
+  const relayOrder = {
+    reactor: RELAY_ORDER_REACTOR,
+    swapper: payer,
+    nonce,
+    deadline: deadlineTs,
+    input: {
+      token: inputCurrency as Address,
+      amount: amountInWei,
+      recipient: addresses.universalRouter as Address,
+    },
+    fee: {
+      token: inputCurrency as Address,
+      startAmount: fillerFeeAmount,
+      endAmount: fillerFeeAmount,
+      startTime: now,
+      endTime: deadlineTs,
+    },
+    universalRouterCalldata: encodedActions as `0x${string}`,
+  } as const;
+  console.log("Step 11: Construct RelayOrder/success", {
+    reactor: relayOrder.reactor,
+    swapper: relayOrder.swapper,
+    nonce: relayOrder.nonce.toString(),
+    deadline: relayOrder.deadline.toString(),
+    inputAmount: relayOrder.input.amount.toString(),
+    feeStart: relayOrder.fee.startAmount.toString(),
+  });
+
+  console.log("Step 12: Sign RelayOrder/start");
+  const domain = { name: "RelayOrder", chainId, verifyingContract: relayOrder.reactor } as const;
+  const types = {
+    Input: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "recipient", type: "address" },
+    ],
+    Fee: [
+      { name: "token", type: "address" },
+      { name: "startAmount", type: "uint256" },
+      { name: "endAmount", type: "uint256" },
+      { name: "startTime", type: "uint256" },
+      { name: "endTime", type: "uint256" },
+    ],
+    RelayOrder: [
+      { name: "reactor", type: "address" },
+      { name: "swapper", type: "address" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "input", type: "Input" },
+      { name: "fee", type: "Fee" },
+      { name: "universalRouterCalldata", type: "bytes" },
+    ],
+  } as const;
+  const message = {
+    reactor: relayOrder.reactor,
+    swapper: relayOrder.swapper,
+    nonce: relayOrder.nonce,
+    deadline: relayOrder.deadline,
+    input: relayOrder.input,
+    fee: relayOrder.fee,
+    universalRouterCalldata: relayOrder.universalRouterCalldata,
+  } as const;
+  let signature: `0x${string}` | undefined;
+  try {
+    signature = await walletClient.signTypedData?.({ account: payer, domain, types, primaryType: "RelayOrder", message });
+    console.log("Step 12: Sign RelayOrder/success", { signatureLen: signature?.length });
+  } catch (sigErr) {
+    console.log("Step 12: Sign RelayOrder/failed", sigErr);
+    console.groupEnd();
+    throw sigErr;
+  }
+
+  console.log("Step 13: Submit RelayOrder/start");
+  const orderPayload = {
+    reactor: message.reactor,
+    swapper: message.swapper,
+    nonce: message.nonce.toString(),
+    deadline: message.deadline.toString(),
+    input: { token: message.input.token, amount: message.input.amount.toString(), recipient: message.input.recipient },
+    fee: { token: message.fee.token, startAmount: message.fee.startAmount.toString(), endAmount: message.fee.endAmount.toString(), startTime: message.fee.startTime.toString(), endTime: message.fee.endTime.toString() },
+    universalRouterCalldata: message.universalRouterCalldata,
+  };
+  try {
+    const resp = await fetch("http://localhost:3000/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order: orderPayload, signature }) });
+    console.log("Step 13: Response status", resp.status);
+    if (!resp.ok) {
+      let msg = `Order submit failed (${resp.status})`;
+      try {
+        const data = await resp.json();
+        console.log("Step 13: Error body", data);
+        msg = (data?.message as string) || msg;
+      } catch {}
+      throw new Error(msg);
+    }
+    const ok = await resp.json();
+    console.log("Step 13: Success body", ok);
+    console.groupEnd();
+    return { order: orderPayload, signature };
+  } catch (e) {
+    console.log("Step 13: Submit RelayOrder/failed", e);
+    console.groupEnd();
+    throw e instanceof Error ? e : new Error(String(e));
   }
 }

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowUpDown, RefreshCw, Loader2 } from "lucide-react";
+import { ArrowUpDown, RefreshCw, Loader2, AlertCircle } from "lucide-react";
 import { TokenSelector, Token } from "./TokenSelector";
 import { useSubgraphPools } from "@/hooks/useSubgraphPools";
 import { SlippageSettings } from "./SlippageSettings";
@@ -14,9 +14,10 @@ import { saveTransaction } from "@/types/transaction";
 import { useV4Provider } from "@/hooks/useV4Provider";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { estimateExactInput, estimateExactOutput, quoteExactInputSingle, quoteExactOutputSingle } from "@/services/uniswap/v4/quoteService";
-import { swapExactInSingle } from "@/services/uniswap/v4/swapService";
+import { swapExactInSingle, createLimitOrder } from "@/services/uniswap/v4/swapService";
 import { getTokenBalance, getNativeBalance } from "@/utils/erc20";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { ZERO_ADDRESS } from "@/services/uniswap/v4/helpers";
 
 interface TokenPrice {
@@ -60,6 +61,9 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const [fromAmount, setFromAmount] = useState("");
   const [toAmount, setToAmount] = useState("");
   const [isFromInput, setIsFromInput] = useState(true);
+  const [mode, setMode] = useState<"swap" | "limit">("swap");
+  const [desiredPrice, setDesiredPrice] = useState<string>("");
+  const [limitTTL, setLimitTTL] = useState<number>(3600);
   const [onchainRate, setOnchainRate] = useState<number | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [countdown, setCountdown] = useState(15);
@@ -73,6 +77,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const [loadingBalances, setLoadingBalances] = useState(false);
   const [insufficientWarning, setInsufficientWarning] = useState<string | null>(null);
   const [activePercent, setActivePercent] = useState<number | null>(null);
+  const [activeDesired, setActiveDesired] = useState<null | 'market' | 1 | 5 | 10>(null);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
 
   // Load pools to build token universe and adjacency mapping
@@ -161,7 +166,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       id: p.id,
       fee: p.feeTier ? parseInt(p.feeTier) : undefined,
       tickSpacing: parseInt(p.tickSpacing),
-      hooks: (p.hooks as any) as `0x${string}` | undefined,
+      hooks: (p.hooks ?? undefined) as `0x${string}` | undefined,
       liquidity: parseFloat(p.liquidity || "0"),
     }))
     .sort((a, b) => (b.liquidity - a.liquidity));
@@ -233,6 +238,144 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         : null
     );
 
+  const baseRate = (() => {
+    if (!exchangeRate || !(Number.isFinite(exchangeRate) && exchangeRate > 0)) return null;
+    return exchangeRate;
+  })();
+
+  const fetchMarketRate = async (): Promise<number | null> => {
+    const rateCandidate = Number(exchangeRate);
+    if (Number.isFinite(rateCandidate) && rateCandidate > 0) return rateCandidate;
+    if (!publicClient || !currentNetwork || !fromToken || !toToken) return null;
+    const fromAddr = fromToken.address as `0x${string}`;
+    const toAddr = toToken.address as `0x${string}`;
+    const selected = selectedPoolId ? liquidPools.find((c) => c.id === selectedPoolId) : undefined;
+    const tickSpacing = selected?.tickSpacing ?? liquidPools[0]?.tickSpacing ?? undefined;
+    const feeTier = selected?.fee ?? liquidPools[0]?.fee ?? undefined;
+    const hooks = selected?.hooks ?? liquidPools[0]?.hooks ?? undefined;
+    try {
+      const res = await quoteExactInputSingle({
+        client: publicClient,
+        chainId: currentNetwork.chainId,
+        tokenIn: fromAddr,
+        tokenOut: toAddr,
+        amount: 1,
+        tickSpacing,
+        fee: feeTier,
+        hooks,
+      });
+      if (res?.rate && res.rate > 0) return res.rate;
+      const est = await estimateExactInput({
+        client: publicClient,
+        chainId: currentNetwork.chainId,
+        tokenIn: fromAddr,
+        tokenOut: toAddr,
+        amount: 1,
+        tickSpacing,
+        fee: feeTier,
+        hooks,
+      });
+      if (est?.rate && est.rate > 0) return est.rate;
+    } catch (e) {
+      console.warn(e);
+    }
+    try {
+      const matches = pools
+        .filter((p) => {
+          const a0 = p.token0?.id?.toLowerCase();
+          const a1 = p.token1?.id?.toLowerCase();
+          return a0 && a1 && ((a0 === fromAddr.toLowerCase() && a1 === toAddr.toLowerCase()) || (a0 === toAddr.toLowerCase() && a1 === fromAddr.toLowerCase()));
+        })
+        .map((p) => ({
+          p,
+          liq: Number(p.liquidity || "0"),
+        }))
+        .sort((x, y) => y.liq - x.liq);
+      const top = matches[0]?.p;
+      if (top && top.tick != null) {
+        const d0 = Number(top.token0?.decimals || "18");
+        const d1 = Number(top.token1?.decimals || "18");
+        const tick = Number(top.tick);
+        const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1); // token1 per token0
+        const a0 = top.token0?.id?.toLowerCase();
+        const isFromToken0 = a0 === fromAddr.toLowerCase();
+        const rate = isFromToken0 ? ratio : (1 / ratio);
+        if (Number.isFinite(rate) && rate > 0) return rate;
+      }
+    } catch (e) {
+      console.warn("subgraph rate fallback failed", e);
+    }
+    return null;
+  };
+
+  const setDesiredToMarket = async () => {
+    const mr = await fetchMarketRate();
+    if (Number.isFinite(mr) && (mr as number) > 0) {
+      setDesiredPrice((mr as number).toFixed(6));
+      setActiveDesired('market');
+    }
+  };
+
+  const applyDesiredPercent = async (percentDelta: number) => {
+    const mr = await fetchMarketRate();
+    const base = Number.isFinite(mr) && (mr as number) > 0
+      ? (mr as number)
+      : (Number.isFinite(exchangeRate) && exchangeRate > 0 ? exchangeRate : NaN);
+    if (!Number.isFinite(base) || base <= 0) return;
+    const next = base * (1 + percentDelta / 100);
+    setDesiredPrice(next.toFixed(6));
+    if (percentDelta === 1) setActiveDesired(1);
+    else if (percentDelta === 5) setActiveDesired(5);
+    else if (percentDelta === 10) setActiveDesired(10);
+  };
+
+  useEffect(() => {
+    const detectDesiredActive = async () => {
+      const dp = parseFloat(desiredPrice || "");
+      if (!(Number.isFinite(dp) && dp > 0) || !fromToken || !toToken) {
+        setActiveDesired(null);
+        return;
+      }
+      let base = baseRate ?? NaN;
+      if (!Number.isFinite(base) || (base as number) <= 0) {
+        const mr = await fetchMarketRate();
+        base = mr ?? NaN;
+      }
+      if (!Number.isFinite(base) || (base as number) <= 0) {
+        setActiveDesired(null);
+        return;
+      }
+      const b = base as number;
+      const candidates: { key: 'market' | 1 | 5 | 10; value: number }[] = [
+        { key: 'market', value: b },
+        { key: 1, value: b * 1.01 },
+        { key: 5, value: b * 1.05 },
+        { key: 10, value: b * 1.10 },
+      ];
+      for (const c of candidates) {
+        const tol = Math.max(1e-6, c.value * 0.005);
+        if (Math.abs(dp - c.value) <= tol) {
+          setActiveDesired(c.key);
+          return;
+        }
+      }
+      setActiveDesired(null);
+    };
+    detectDesiredActive();
+  }, [desiredPrice, fromToken?.address, toToken?.address, baseRate]);
+
+  useEffect(() => {
+    if (mode === "limit" && !desiredPrice && baseRate && Number.isFinite(baseRate) && baseRate > 0) {
+      setDesiredPrice(baseRate.toFixed(6));
+    }
+  }, [mode, baseRate]);
+
+  useEffect(() => {
+    if (mode === "limit") {
+      setIsFromInput(true);
+    }
+  }, [mode, fromToken?.address, toToken?.address]);
+
   // Auto-calculate output amount
   // Quote using on-chain pool price when possible
   useEffect(() => {
@@ -241,6 +384,32 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       if (!fromToken || !toToken) return;
       const fromAddr = fromToken.address as `0x${string}`;
       const toAddr = toToken.address as `0x${string}`;
+
+      // Limit mode: derive amounts based on Desired price or infer Desired price from amounts
+      if (mode === "limit") {
+        try {
+          setQuoting(true);
+          const dpNum = parseFloat(desiredPrice || "");
+          const rateN = Number.isFinite(dpNum) && dpNum > 0 ? dpNum : undefined;
+
+          if (isFromInput && fromAmount && rateN && rateN > 0) {
+            const amt = parseFloat(fromAmount);
+            if (Number.isFinite(amt) && amt > 0) {
+              const calc = amt * rateN;
+              setToAmount(calc.toFixed(6));
+            }
+          } else if (!isFromInput && toAmount && rateN && rateN > 0) {
+            const amt = parseFloat(toAmount);
+            if (Number.isFinite(amt) && amt > 0) {
+              const calc = amt / rateN;
+              setFromAmount(calc.toFixed(6));
+            }
+          }
+        } finally {
+          setQuoting(false);
+        }
+        return;
+      }
 
       // If no client/network, perform Coingecko-based fallback when possible
       if (!publicClient || !currentNetwork) {
@@ -309,7 +478,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
             hooks,
           }));
           console.debug("quoteExactInputSingle/estimateExactInput result:", res);
-          if (hooks && hooks !== ("0x0000000000000000000000000000000000000000" as any)) {
+          if (hooks && hooks !== "0x0000000000000000000000000000000000000000") {
             console.debug("Quoter skipped due to hooks; using state-view estimate.");
           }
           if (res) {
@@ -348,7 +517,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
             tickSpacing,
           }));
           console.debug("quoteExactOutputSingle/estimateExactOutput result:", res);
-          if (hooks && hooks !== ("0x0000000000000000000000000000000000000000" as any)) {
+          if (hooks && hooks !== "0x0000000000000000000000000000000000000000") {
             console.debug("Quoter skipped due to hooks; using state-view estimate for exact output.");
           }
           if (res) {
@@ -422,7 +591,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       runQuote();
     }, 300);
     return () => clearTimeout(timeout);
-  }, [publicClient, currentNetwork, pools, fromToken, toToken, isFromInput, fromAmount, toAmount, exchangeRate]);
+  }, [publicClient, currentNetwork, pools, fromToken, toToken, isFromInput, fromAmount, toAmount, exchangeRate, desiredPrice]);
 
   // Load wallet balances for selected tokens
   useEffect(() => {
@@ -537,7 +706,9 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         try {
           const reserve = await estimateNativeGasReserve();
           available = Math.max(0, bal - reserve);
-        } catch {}
+        } catch (e) {
+          console.warn(e);
+        }
       }
       const options = [0.25, 0.5, 0.75, 1];
       for (const p of options) {
@@ -571,7 +742,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     const isNative = isNativeAddress(fromToken.address);
     const gasReserve = isNative ? await estimateNativeGasReserve() : 0;
     const spendable = isNative ? Math.max(0, bal - gasReserve) : bal;
-    let amount = Math.min(bal * percent, spendable);
+    const amount = Math.min(bal * percent, spendable);
     if (isNative && amount <= 0) {
       setInsufficientWarning("Insufficient native balance to cover gas fees.");
     }
@@ -605,6 +776,11 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     setToAmount(sanitized);
   };
 
+  const handleDesiredPriceChange = (value: string) => {
+    const sanitized = sanitizeDecimalInput(value);
+    setDesiredPrice(sanitized);
+  };
+
   const handleSwap = () => {
     if (!walletAddress) {
       toast.error("Please connect your wallet to perform a swap.");
@@ -614,7 +790,11 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       toast.error("Please fill in all swap details.");
       return;
     }
-    setShowConfirmDialog(true);
+    if (mode === "swap") {
+      setShowConfirmDialog(true);
+    } else {
+      handlePlaceLimitOrder();
+    }
   };
 
   const handleConfirmSwap = async () => {
@@ -649,16 +829,19 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       const fromPrice = prices?.[fromToken.coingeckoId]?.usd || 0;
       const valueUsd = parseFloat(fromAmount) * fromPrice;
 
+      const hash = (typeof receipt === "object" && receipt && "transactionHash" in receipt)
+        ? (receipt as { transactionHash?: string }).transactionHash
+        : undefined;
+
       saveTransaction({
         fromToken: { symbol: fromToken.symbol, logo: fromToken.logo, amount: fromAmount },
         toToken: { symbol: toToken.symbol, logo: toToken.logo, amount: toAmount ?? "" },
         exchangeRate: onchainRate ?? exchangeRate ?? 0,
         slippage,
         valueUsd,
-        txHash: (receipt as any)?.transactionHash,
+        txHash: hash,
       });
 
-      const hash = (receipt as any)?.transactionHash;
       setTxHash(hash);
       setTxStatus("success");
       toast.success(`Swap completed! Tx: ${hash ?? ""}`);
@@ -666,10 +849,80 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       setBalancesRefreshKey((k) => k + 1);
       setFromAmount("");
       setToAmount("");
-    } catch (err: any) {
-      console.error("❌ Swap failed:", err?.reason || err?.message || err);
+    } catch (err: unknown) {
+      const e = err as { reason?: string; message?: string };
+      console.error("❌ Swap failed:", e?.reason || e?.message || err);
       setTxStatus("error");
-      toast.error(err?.reason || err?.message || "Swap failed");
+      toast.error(e?.reason || e?.message || "Swap failed");
+    }
+  };
+
+  const handlePlaceLimitOrder = async () => {
+    if (!fromToken || !toToken || !fromAmount || !publicClient || !walletClient || !currentNetwork || !walletAddress) return;
+    const dp = parseFloat(desiredPrice || "");
+    if (!(Number.isFinite(dp) && dp > 0)) {
+      toast.error("Please enter a valid desired price.");
+      return;
+    }
+    try {
+      console.groupCollapsed("🟦 UI/LimitOrder/handlePlaceLimitOrder");
+      console.debug("network:", { name: currentNetwork?.name, chainId: currentNetwork?.chainId });
+      console.debug("tokens:", { from: fromToken.symbol, to: toToken.symbol, fromAddr: fromToken.address, toAddr: toToken.address });
+      console.debug("inputs:", { fromAmount, desiredPrice: dp });
+      setTxStatus("loading");
+      setTxHash(undefined);
+      try { (document.activeElement as HTMLElement | null)?.blur?.(); } catch {}
+      setTxDialogOpen(true);
+
+      const fromAddr = fromToken.address as `0x${string}`;
+      const toAddr = toToken.address as `0x${string}`;
+      const selected = selectedPoolId ? liquidPools.find((c) => c.id === selectedPoolId) : undefined;
+      const tickSpacing = selected?.tickSpacing ?? liquidPools[0]?.tickSpacing ?? undefined;
+      const feeTier = selected?.fee ?? liquidPools[0]?.fee ?? undefined;
+      const hooks = selected?.hooks ?? liquidPools[0]?.hooks ?? undefined;
+
+      const normalizedDesired = dp;
+      console.debug("pool candidates:", { selectedPoolId, tickSpacing, feeTier, hooks });
+      const { order, signature } = await createLimitOrder({
+        publicClient,
+        walletClient,
+        chainId: currentNetwork.chainId,
+        tokenIn: fromAddr,
+        tokenOut: toAddr,
+        amountInHuman: parseFloat(fromAmount),
+        desiredPrice: normalizedDesired,
+        tickSpacing: tickSpacing!,
+        fee: feeTier,
+        hooks,
+        ttlSeconds: limitTTL,
+        account: walletAddress as `0x${string}`,
+        recipient: walletAddress as `0x${string}`,
+      });
+      console.debug("✅ Limit order signed:", { order, signature });
+
+      const fromPrice = prices?.[fromToken.coingeckoId]?.usd || 0;
+      const valueUsd = parseFloat(fromAmount) * fromPrice;
+      saveTransaction({
+        fromToken: { symbol: fromToken.symbol, logo: fromToken.logo, amount: fromAmount },
+        toToken: { symbol: toToken.symbol, logo: toToken.logo, amount: toAmount ?? "" },
+        exchangeRate: normalizedDesired,
+        slippage: 0,
+        valueUsd,
+        txHash: undefined,
+      });
+
+      setTxStatus("success");
+      toast.success("Limit order created and signed");
+      console.groupEnd();
+      setBalancesRefreshKey((k) => k + 1);
+      setFromAmount("");
+      setToAmount("");
+    } catch (err: unknown) {
+      const e = err as { reason?: string; message?: string };
+      console.error("❌ Limit order failed:", e?.reason || e?.message || err);
+      setTxStatus("error");
+      toast.error(e?.reason || e?.message || "Failed to create limit order");
+      console.groupEnd();
     }
   };
 
@@ -685,7 +938,10 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     <>
       <Card className="w-full p-4 bg-card/80 backdrop-blur-xl border-glass shadow-glow">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Swap</h2>
+        <div className="flex items-center gap-2">
+          <Button variant={mode === "swap" ? "default" : "outline"} size="sm" onClick={() => setMode("swap")}>Swap</Button>
+          <Button variant={mode === "limit" ? "default" : "outline"} size="sm" onClick={() => setMode("limit")}>Limit</Button>
+        </div>
         <div className="flex items-center gap-2">
           {fromToken && toToken && (
             <span className="text-sm text-muted-foreground flex items-center gap-1">
@@ -724,11 +980,91 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         </div>
       )}
 
+      {mode === "limit" && (
+        <div className="mt-2 p-3 bg-muted/30 rounded-xl border border-glass space-y-3">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-muted-foreground">Desired price</span>
+            <div className="flex items-center gap-2">
+              <Input
+                type="text"
+                placeholder="0.0"
+                value={desiredPrice}
+                onChange={(e) => handleDesiredPriceChange(e.target.value)}
+                inputMode="decimal"
+                step="any"
+                className="w-40"
+              />
+              {fromToken && toToken ? (
+                <span className="text-sm text-muted-foreground">
+                  {`${toToken.symbol} per ${fromToken.symbol}`}
+                </span>
+              ) : (
+                <div className="px-2 py-1 rounded-lg bg-amber-100/10 border border-amber-200/50 text-amber-600 dark:text-amber-400 text-xs inline-flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3" /> Select a token pair
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-muted-foreground">
+              {(() => {
+                const d = parseFloat(desiredPrice || "");
+                if (Number.isFinite(d) && d > 0) {
+                  return (
+                    <>
+                      <span className="mr-3">Desired: 1 {fromToken?.symbol || "FROM"} = {d.toFixed(6)} {toToken?.symbol || "TO"}</span>
+                      <span>Inv: 1 {toToken?.symbol || "TO"} = {(1 / d).toFixed(6)} {fromToken?.symbol || "FROM"}</span>
+                    </>
+                  );
+                }
+                if (Number.isFinite(exchangeRate) && exchangeRate > 0) {
+                  return (
+                    <>
+                      <span className="mr-3">Market: 1 {fromToken?.symbol || "FROM"} = {exchangeRate.toFixed(6)} {toToken?.symbol || "TO"}</span>
+                      <span>Inv: 1 {toToken?.symbol || "TO"} = {(1 / exchangeRate).toFixed(6)} {fromToken?.symbol || "FROM"}</span>
+                    </>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+          </div>
+          <TooltipProvider>
+            <div className="flex flex-wrap gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant={activeDesired==='market' ? 'default' : 'outline'} size="sm" onClick={setDesiredToMarket} disabled={!fromToken || !toToken}>Market</Button>
+                </TooltipTrigger>
+                <TooltipContent>Set desired price to market rate</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant={activeDesired===1 ? 'default' : 'outline'} size="sm" onClick={() => void applyDesiredPercent(1)} disabled={!fromToken || !toToken}>+1%</Button>
+                </TooltipTrigger>
+                <TooltipContent>Increase desired price by 1%</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant={activeDesired===5 ? 'default' : 'outline'} size="sm" onClick={() => void applyDesiredPercent(5)} disabled={!fromToken || !toToken}>+5%</Button>
+                </TooltipTrigger>
+                <TooltipContent>Increase desired price by 5%</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant={activeDesired===10 ? 'default' : 'outline'} size="sm" onClick={() => void applyDesiredPercent(10)} disabled={!fromToken || !toToken}>+10%</Button>
+                </TooltipTrigger>
+                <TooltipContent>Increase desired price by 10%</TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
+        </div>
+      )}
+
       <div className="space-y-2">
         {/* From Token */}
         <div className="bg-muted/50 rounded-2xl p-4 border border-glass relative">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-muted-foreground">You pay</span>
+            <span className="text-sm text-muted-foreground">{mode === "swap" ? "You pay" : "You will pay"}</span>
             <span className="text-sm text-muted-foreground">
               {fromToken && prices?.[fromToken.coingeckoId]?.usd && fromAmount
                 ? `~$${(parseFloat(fromAmount) * (prices[fromToken.coingeckoId].usd || 0)).toFixed(2)}`
@@ -834,7 +1170,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         </div>
       </div>
 
-      {fromToken && toToken && exchangeRate && (fromAmount || toAmount) && (
+      {mode === "swap" && fromToken && toToken && exchangeRate && (fromAmount || toAmount) && (
         <div className="mt-4 p-3 bg-muted/30 rounded-xl border border-glass space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">Exchange rate</span>
@@ -861,15 +1197,19 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         </div>
       )}
 
+
       <Button 
         onClick={handleSwap}
         disabled={
           !walletAddress ||
           !fromToken ||
           !toToken ||
-          (isFromInput
-            ? !(Number.isFinite(parseFloat(fromAmount || "")) && parseFloat(fromAmount || "") > 0)
-            : !(Number.isFinite(parseFloat(toAmount || "")) && parseFloat(toAmount || "") > 0)
+          (mode === "swap"
+            ? (isFromInput
+                ? !(Number.isFinite(parseFloat(fromAmount || "")) && parseFloat(fromAmount || "") > 0)
+                : !(Number.isFinite(parseFloat(toAmount || "")) && parseFloat(toAmount || "") > 0)
+              )
+            : !(Number.isFinite(parseFloat(fromAmount || "")) && parseFloat(fromAmount || "") > 0 && Number.isFinite(parseFloat(desiredPrice || "")) && parseFloat(desiredPrice || "") > 0)
           ) ||
           pricesLoading ||
           quoting ||
@@ -877,11 +1217,13 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         }
         className="w-full mt-4 h-14 text-lg font-semibold bg-gradient-primary hover:opacity-90 transition-opacity disabled:opacity-50"
       >
-        {quoting
-          ? 'Estimating...'
-          : pricesLoading
-            ? 'Loading price...'
-            : (!walletAddress ? 'Connect wallet to swap' : 'Swap')}
+        {mode === "swap"
+          ? (quoting
+              ? 'Estimating...'
+              : pricesLoading
+                ? 'Loading price...'
+                : (!walletAddress ? 'Connect wallet to swap' : 'Swap'))
+          : (!walletAddress ? 'Connect wallet to place order' : 'Place Limit Order')}
       </Button>
     </Card>
 
