@@ -10,6 +10,39 @@ const TICK_TO_FEE: Record<number, number> = {
   200: 10000,
 };
 
+/**
+ * Fetch current pool price from Indexer API (realtime, same calculation as Filler)
+ * Returns price calculated from on-chain sqrtPriceX96
+ */
+export async function fetchPoolPriceFromIndexer(poolId: string): Promise<{
+  price: number;
+  inversePrice: number;
+  tick: number;
+  lastUpdated: string;
+} | null> {
+  try {
+    // TODO: Use env variable for API URL
+    const apiUrl = `http://localhost:3001/indexer/pools/${poolId}/price`;
+    const response = await fetch(apiUrl);
+    
+    if (!response.ok) {
+      console.warn(`Failed to fetch pool price from indexer: ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    return {
+      price: parseFloat(data.price),
+      inversePrice: parseFloat(data.inversePrice),
+      tick: data.tick,
+      lastUpdated: data.lastUpdated,
+    };
+  } catch (error) {
+    console.error('Error fetching pool price from indexer:', error);
+    return null;
+  }
+}
+
 export interface QuoteParams {
   client: any;
   chainId: number;

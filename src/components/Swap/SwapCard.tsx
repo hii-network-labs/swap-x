@@ -10,10 +10,11 @@ import { SwapConfirmDialog } from "./SwapConfirmDialog";
 import { toast } from "sonner";
 import { TxStatusDialog } from "@/components/ui/TxStatusDialog";
 import { useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { saveTransaction } from "@/types/transaction";
 import { useV4Provider } from "@/hooks/useV4Provider";
 import { useNetwork } from "@/contexts/NetworkContext";
-import { estimateExactInput, estimateExactOutput, quoteExactInputSingle, quoteExactOutputSingle } from "@/services/uniswap/v4/quoteService";
+import { estimateExactInput, estimateExactOutput, quoteExactInputSingle, quoteExactOutputSingle, fetchPoolPriceFromIndexer } from "@/services/uniswap/v4/quoteService";
 import { swapExactInSingle, createLimitOrder } from "@/services/uniswap/v4/swapService";
 import { getTokenBalance, getNativeBalance } from "@/utils/erc20";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -41,9 +42,10 @@ interface SwapCardProps {
   selectedToToken?: Token | null;
   onSelectFromToken?: (token: Token) => void;
   onSelectToToken?: (token: Token) => void;
+  onModeChange?: (mode: "swap" | "limit") => void;
 }
 
-export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress, selectedFromToken, selectedToToken, onSelectFromToken, onSelectToToken }: SwapCardProps) => {
+export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress, selectedFromToken, selectedToToken, onSelectFromToken, onSelectToToken, onModeChange }: SwapCardProps) => {
   // Internal state (used only if controlled props are not provided)
   const [fromTokenState, setFromTokenState] = useState<Token | null>(null);
   const [toTokenState, setToTokenState] = useState<Token | null>(null);
@@ -54,6 +56,26 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const setToToken = onSelectToToken ?? setToTokenState;
   const { publicClient, walletClient } = useV4Provider();
   const { currentNetwork, walletAddress, balancesRefreshKey, setBalancesRefreshKey } = useNetwork();
+  const queryClient = useQueryClient();
+
+  const friendlyErrorMessage = (err: unknown): string => {
+    const e = err as any;
+    const text = String(e?.reason || e?.message || "").toLowerCase();
+    const code = e?.code;
+    if (code === 4001 || text.includes("user rejected") || text.includes("rejected") || text.includes("denied")) {
+      return "Bạn đã từ chối giao dịch trong ví.";
+    }
+    if (text.includes("insufficient funds") || text.includes("insufficient balance")) {
+      return "Số dư không đủ để thực hiện giao dịch.";
+    }
+    if (text.includes("deadline") || text.includes("expire")) {
+      return "Giao dịch đã hết hạn.";
+    }
+    if (text.includes("network") || text.includes("chain") || text.includes("unsupported")) {
+      return "Lỗi mạng. Vui lòng kiểm tra mạng trong ví.";
+    }
+    return "Không thể thực hiện giao dịch. Vui lòng thử lại.";
+  };
 
   useEffect(() => {
     onTokensChange?.(fromToken, toToken);
@@ -63,6 +85,8 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const [isFromInput, setIsFromInput] = useState(true);
   const [mode, setMode] = useState<"swap" | "limit">("swap");
   const [desiredPrice, setDesiredPrice] = useState<string>("");
+  const [limitSide, setLimitSide] = useState<"buy" | "sell">("buy");
+  const [sizeAmount, setSizeAmount] = useState<string>("");
   const [limitTTL, setLimitTTL] = useState<number>(3600);
   const [onchainRate, setOnchainRate] = useState<number | null>(null);
   const [quoting, setQuoting] = useState(false);
@@ -79,6 +103,16 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const [activePercent, setActivePercent] = useState<number | null>(null);
   const [activeDesired, setActiveDesired] = useState<null | 'market' | 1 | 5 | 10>(null);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
+  
+  // Realtime pool price from Indexer API
+  const [realtimePrice, setRealtimePrice] = useState<{
+    price: number;
+    inversePrice: number;
+    tick: number;
+    lastUpdated: string;
+  } | null>(null);
+  const [loadingRealtimePrice, setLoadingRealtimePrice] = useState(false);
+
 
   // Load pools to build token universe and adjacency mapping
   const { pools } = useSubgraphPools();
@@ -186,6 +220,35 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     }
   }, [fromToken?.address, toToken?.address, pools.length]);
 
+  const STABLE_SET = new Set(["USDT","USDC","BUSD","HNC"]);
+  const stableFrom = STABLE_SET.has(String(fromToken?.symbol || ""));
+  const stableTo = STABLE_SET.has(String(toToken?.symbol || ""));
+  const pairPool = pools.find((p) => {
+    const a0 = p.token0?.id?.toLowerCase();
+    const a1 = p.token1?.id?.toLowerCase();
+    const f = fromToken?.address?.toLowerCase();
+    const t = toToken?.address?.toLowerCase();
+    return a0 && a1 && f && t && ((a0 === f && a1 === t) || (a0 === t && a1 === f));
+  });
+  const token0Addr = pairPool?.token0?.id?.toLowerCase();
+  const principalAddr = stableFrom && !stableTo
+    ? toToken?.address?.toLowerCase()
+    : (!stableFrom && stableTo
+        ? fromToken?.address?.toLowerCase()
+        : (token0Addr || fromToken?.address?.toLowerCase()));
+  const principalToken = principalAddr
+    ? (principalAddr === fromToken?.address?.toLowerCase() ? fromToken : toToken)
+    : null;
+  const quoteToken = principalToken && fromToken && toToken
+    ? (principalToken.address.toLowerCase() === fromToken.address.toLowerCase() ? toToken : fromToken)
+    : null;
+  const principalBalance = principalToken && fromToken
+    ? (principalToken.address.toLowerCase() === fromToken.address.toLowerCase() ? fromBalance : toBalance)
+    : null;
+  const quoteBalance = quoteToken && fromToken
+    ? (quoteToken.address.toLowerCase() === fromToken.address.toLowerCase() ? fromBalance : toBalance)
+    : null;
+
   // Fetch prices for selected tokens
   const { data: prices, isLoading: pricesLoading } = useQuery({
     queryKey: ['tokenPrices', fromToken?.coingeckoId, toToken?.coingeckoId],
@@ -214,6 +277,48 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       setToToken(initTo);
     }
   }, [initialFromAddress, initialToAddress, allTokens, selectedFromToken, selectedToToken]);
+
+  // Fetch realtime pool price from Indexer API (poll every 10s)
+  useEffect(() => {
+    if (!selectedPoolId || !fromToken || !toToken) {
+      setRealtimePrice(null);
+      return;
+    }
+
+    const fetchPrice = async () => {
+      try {
+        setLoadingRealtimePrice(true);
+        const price = await fetchPoolPriceFromIndexer(selectedPoolId);
+        if (price) {
+          setRealtimePrice(price);
+          // Optionally update onchainRate to use realtime price
+          // Determine direction: if fromToken is token0, use price, else use inversePrice
+          const selected = liquidPools.find((p) => p.id === selectedPoolId);
+          if (selected) {
+            // Fetch pool data to determine token order
+            const pool = pools.find((p) => p.id === selectedPoolId);
+            if (pool) {
+              const isFromToken0 = fromToken.address.toLowerCase() === pool.token0?.id?.toLowerCase();
+              const rate = isFromToken0 ? price.price : price.inversePrice;
+              setOnchainRate(rate);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch realtime pool price:', error);
+      } finally {
+        setLoadingRealtimePrice(false);
+      }
+    };
+
+    // Fetch immediately
+    fetchPrice();
+
+    // Poll every 10 seconds
+    const interval = setInterval(fetchPrice, 10_000);
+
+    return () => clearInterval(interval);
+  }, [selectedPoolId, fromToken?.address, toToken?.address, pools]);
 
   // Countdown timer for price refresh
   useEffect(() => {
@@ -311,7 +416,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const setDesiredToMarket = async () => {
     const mr = await fetchMarketRate();
     if (Number.isFinite(mr) && (mr as number) > 0) {
-      setDesiredPrice((mr as number).toFixed(6));
+      setDesiredPrice(String(mr));
       setActiveDesired('market');
     }
   };
@@ -323,7 +428,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       : (Number.isFinite(exchangeRate) && exchangeRate > 0 ? exchangeRate : NaN);
     if (!Number.isFinite(base) || base <= 0) return;
     const next = base * (1 + percentDelta / 100);
-    setDesiredPrice(next.toFixed(6));
+    setDesiredPrice(String(next));
     if (percentDelta === 1) setActiveDesired(1);
     else if (percentDelta === 5) setActiveDesired(5);
     else if (percentDelta === 10) setActiveDesired(10);
@@ -366,9 +471,16 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
 
   useEffect(() => {
     if (mode === "limit" && !desiredPrice && baseRate && Number.isFinite(baseRate) && baseRate > 0) {
-      setDesiredPrice(baseRate.toFixed(6));
+      setDesiredPrice(String(baseRate));
     }
   }, [mode, baseRate]);
+
+  useEffect(() => {
+    if (mode !== "limit") return;
+    if (activeDesired === 'market' && baseRate && Number.isFinite(baseRate) && baseRate > 0) {
+      setDesiredPrice(String(baseRate));
+    }
+  }, [fromToken?.address, toToken?.address, activeDesired, baseRate, mode]);
 
   useEffect(() => {
     if (mode === "limit") {
@@ -385,31 +497,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       const fromAddr = fromToken.address as `0x${string}`;
       const toAddr = toToken.address as `0x${string}`;
 
-      // Limit mode: derive amounts based on Desired price or infer Desired price from amounts
-      if (mode === "limit") {
-        try {
-          setQuoting(true);
-          const dpNum = parseFloat(desiredPrice || "");
-          const rateN = Number.isFinite(dpNum) && dpNum > 0 ? dpNum : undefined;
-
-          if (isFromInput && fromAmount && rateN && rateN > 0) {
-            const amt = parseFloat(fromAmount);
-            if (Number.isFinite(amt) && amt > 0) {
-              const calc = amt * rateN;
-              setToAmount(calc.toFixed(6));
-            }
-          } else if (!isFromInput && toAmount && rateN && rateN > 0) {
-            const amt = parseFloat(toAmount);
-            if (Number.isFinite(amt) && amt > 0) {
-              const calc = amt / rateN;
-              setFromAmount(calc.toFixed(6));
-            }
-          }
-        } finally {
-          setQuoting(false);
-        }
-        return;
-      }
+      if (mode === "limit") return;
 
       // If no client/network, perform Coingecko-based fallback when possible
       if (!publicClient || !currentNetwork) {
@@ -593,6 +681,32 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     return () => clearTimeout(timeout);
   }, [publicClient, currentNetwork, pools, fromToken, toToken, isFromInput, fromAmount, toAmount, exchangeRate, desiredPrice]);
 
+  useEffect(() => {
+    if (mode !== "limit") return;
+    const dp = parseFloat(desiredPrice || "");
+    const sz = parseFloat(sizeAmount || "");
+    if (!principalToken || !quoteToken) {
+      setFromAmount("");
+      setToAmount("");
+      return;
+    }
+    if (!(Number.isFinite(dp) && dp > 0) || !(Number.isFinite(sz) && sz > 0)) {
+      setFromAmount("");
+      setToAmount("");
+      return;
+    }
+    setIsFromInput(true);
+    if (limitSide === "buy") {
+      const fin = sz * dp;
+      setFromAmount(fin.toFixed(6));
+      setToAmount(sz.toFixed(6));
+    } else {
+      const fout = sz * dp;
+      setFromAmount(sz.toFixed(6));
+      setToAmount(fout.toFixed(6));
+    }
+  }, [mode, limitSide, desiredPrice, sizeAmount, principalToken?.address, quoteToken?.address]);
+
   // Load wallet balances for selected tokens
   useEffect(() => {
     const loadBalances = async () => {
@@ -752,6 +866,30 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     setActivePercent(percent);
   };
 
+  const applySizeQuick = async (percent: number) => {
+    if (!walletAddress || !principalToken || !quoteToken) {
+      toast.error("Please connect your wallet and select a pair.");
+      return;
+    }
+    const dp = parseFloat(desiredPrice || "");
+    const baseBal = limitSide === "sell" ? parseFloat(principalBalance || "0") : parseFloat(quoteBalance || "0");
+    if (!(Number.isFinite(baseBal) && baseBal > 0)) {
+      toast.error("Insufficient balance.");
+      return;
+    }
+    if (limitSide === "buy") {
+      if (!(Number.isFinite(dp) && dp > 0)) {
+        toast.error("Enter a valid price first.");
+        return;
+      }
+      const size = (baseBal * percent) / dp;
+      setSizeAmount(size > 0 ? size.toFixed(6) : "0");
+    } else {
+      const size = baseBal * percent;
+      setSizeAmount(size > 0 ? size.toFixed(6) : "0");
+    }
+  };
+
   // Chuẩn hóa chuỗi số thập phân: thay ',' bằng '.', loại bỏ ký tự không hợp lệ
   const sanitizeDecimalInput = (value: string) => {
     if (!value) return "";
@@ -779,6 +917,11 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const handleDesiredPriceChange = (value: string) => {
     const sanitized = sanitizeDecimalInput(value);
     setDesiredPrice(sanitized);
+  };
+
+  const handleSizeAmountChange = (value: string) => {
+    const sanitized = sanitizeDecimalInput(value);
+    setSizeAmount(sanitized);
   };
 
   const handleSwap = () => {
@@ -853,17 +996,32 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       const e = err as { reason?: string; message?: string };
       console.error("❌ Swap failed:", e?.reason || e?.message || err);
       setTxStatus("error");
-      toast.error(e?.reason || e?.message || "Swap failed");
+      toast.error(friendlyErrorMessage(err));
     }
   };
 
   const handlePlaceLimitOrder = async () => {
-    if (!fromToken || !toToken || !fromAmount || !publicClient || !walletClient || !currentNetwork || !walletAddress) return;
+    if (!fromToken || !toToken || !publicClient || !walletClient || !currentNetwork || !walletAddress) return;
     const dp = parseFloat(desiredPrice || "");
     if (!(Number.isFinite(dp) && dp > 0)) {
       toast.error("Please enter a valid desired price.");
       return;
     }
+    const sz = parseFloat(sizeAmount || "");
+    if (!(Number.isFinite(sz) && sz > 0)) {
+      toast.error("Please enter a valid size.");
+      return;
+    }
+    try {
+      const market = await fetchMarketRate();
+      if (Number.isFinite(market) && (market as number) > 0) {
+        const mr = market as number; // 1 FROM = mr TO
+        const tol = Math.max(1e-6, mr * 0.001); // 0.1% tolerance
+        if (Math.abs(dp - mr) <= tol) {
+          toast.info("Desired price equals market — order may execute immediately.");
+        }
+      }
+    } catch {}
     try {
       console.groupCollapsed("🟦 UI/LimitOrder/handlePlaceLimitOrder");
       console.debug("network:", { name: currentNetwork?.name, chainId: currentNetwork?.chainId });
@@ -881,30 +1039,59 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       const feeTier = selected?.fee ?? liquidPools[0]?.fee ?? undefined;
       const hooks = selected?.hooks ?? liquidPools[0]?.hooks ?? undefined;
 
-      const normalizedDesired = dp;
+      // SwapService expects desiredPrice = output per input
+      // For BUY: swap NONA→NONO3, price is "NONA per NONO3", so output/input = 1/price (NONO3 per NONA)
+      // For SELL: swap NONO3→NONA, price is "NONA per NONO3", so output/input = price (NONA per NONO3)
+      const normalizedDesired = limitSide === "buy" ? (1 / dp) : dp; // output per input
       console.debug("pool candidates:", { selectedPoolId, tickSpacing, feeTier, hooks });
+      console.debug("price conversion:", { uiPrice: dp, limitSide, normalizedDesired: normalizedDesired, meaning: limitSide === "buy" ? "NONO3 per NONA" : "NONA per NONO3" });
+      const STABLE = new Set(["USDT","USDC","BUSD","HNC"]);
+      const fromSym = String(fromToken.symbol || "");
+      const toSym = String(toToken.symbol || "");
+      const stableFrom = STABLE.has(fromSym);
+      const stableTo = STABLE.has(toSym);
+      const poolMeta = pools.find((p) => {
+        const a0 = p.token0?.id?.toLowerCase();
+        const a1 = p.token1?.id?.toLowerCase();
+        return a0 && a1 && ((a0 === fromToken.address.toLowerCase() && a1 === toToken.address.toLowerCase()) || (a0 === toToken.address.toLowerCase() && a1 === fromToken.address.toLowerCase()));
+      });
+      const token0Addr = poolMeta?.token0?.id?.toLowerCase();
+      const principalAddr = stableFrom && !stableTo ? toToken.address.toLowerCase() : (!stableFrom && stableTo ? fromToken.address.toLowerCase() : (token0Addr ? token0Addr : fromToken.address.toLowerCase()));
+      const quoteAddr = principalAddr === fromToken.address.toLowerCase() ? toToken.address.toLowerCase() : fromToken.address.toLowerCase();
+
+      const principalToken = principalAddr === fromToken.address.toLowerCase() ? fromToken : toToken;
+      const quoteToken = quoteAddr === fromToken.address.toLowerCase() ? fromToken : toToken;
+
+      const tokenInAddr: `0x${string}` = limitSide === "buy" ? (quoteToken.address as `0x${string}`) : (principalToken.address as `0x${string}`);
+      const tokenOutAddr: `0x${string}` = limitSide === "buy" ? (principalToken.address as `0x${string}`) : (quoteToken.address as `0x${string}`);
+
+      const amountInHuman = limitSide === "buy" ? (sz * dp) : sz;
+
       const { order, signature } = await createLimitOrder({
         publicClient,
         walletClient,
         chainId: currentNetwork.chainId,
-        tokenIn: fromAddr,
-        tokenOut: toAddr,
-        amountInHuman: parseFloat(fromAmount),
+        tokenIn: tokenInAddr,
+        tokenOut: tokenOutAddr,
+        amountInHuman,
         desiredPrice: normalizedDesired,
+        uiDesiredPrice: dp,
+        uiSize: sz,
         tickSpacing: tickSpacing!,
         fee: feeTier,
         hooks,
         ttlSeconds: limitTTL,
         account: walletAddress as `0x${string}`,
         recipient: walletAddress as `0x${string}`,
+        side: limitSide, // Pass explicit side ('buy' or 'sell')
       });
       console.debug("✅ Limit order signed:", { order, signature });
 
-      const fromPrice = prices?.[fromToken.coingeckoId]?.usd || 0;
-      const valueUsd = parseFloat(fromAmount) * fromPrice;
+      const inTokenPriceUsd = prices?.[(limitSide === "buy" ? quoteToken.coingeckoId : principalToken.coingeckoId) as string]?.usd || 0;
+      const valueUsd = amountInHuman * inTokenPriceUsd;
       saveTransaction({
-        fromToken: { symbol: fromToken.symbol, logo: fromToken.logo, amount: fromAmount },
-        toToken: { symbol: toToken.symbol, logo: toToken.logo, amount: toAmount ?? "" },
+        fromToken: { symbol: (limitSide === "buy" ? quoteToken.symbol : principalToken.symbol), logo: (limitSide === "buy" ? quoteToken.logo : principalToken.logo), amount: amountInHuman.toString() },
+        toToken: { symbol: (limitSide === "buy" ? principalToken.symbol : quoteToken.symbol), logo: (limitSide === "buy" ? principalToken.logo : quoteToken.logo), amount: "" },
         exchangeRate: normalizedDesired,
         slippage: 0,
         valueUsd,
@@ -913,25 +1100,36 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
 
       setTxStatus("success");
       toast.success("Limit order created and signed");
+      try {
+        queryClient.invalidateQueries({ queryKey: ["my-orders"] });
+        queryClient.invalidateQueries({ queryKey: ["order-book"] });
+      } catch {}
       console.groupEnd();
       setBalancesRefreshKey((k) => k + 1);
+      setSizeAmount("");
       setFromAmount("");
       setToAmount("");
     } catch (err: unknown) {
       const e = err as { reason?: string; message?: string };
       console.error("❌ Limit order failed:", e?.reason || e?.message || err);
       setTxStatus("error");
-      toast.error(e?.reason || e?.message || "Failed to create limit order");
+      toast.error(friendlyErrorMessage(err));
       console.groupEnd();
     }
   };
 
   const switchTokens = () => {
+    // Switch tokens
     setFromToken(toToken);
     setToToken(fromToken);
-    setFromAmount(toAmount);
-    setToAmount(fromAmount);
-    setIsFromInput(!isFromInput);
+    
+    // Reset form state for clean slate
+    setFromAmount("");
+    setToAmount("");
+    setDesiredPrice("");
+    setIsFromInput(true);
+    setActivePercent(null);
+    setActiveDesired(null);
   };
 
   return (
@@ -939,8 +1137,8 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       <Card className="w-full p-4 bg-card/80 backdrop-blur-xl border-glass shadow-glow">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <Button variant={mode === "swap" ? "default" : "outline"} size="sm" onClick={() => setMode("swap")}>Swap</Button>
-          <Button variant={mode === "limit" ? "default" : "outline"} size="sm" onClick={() => setMode("limit")}>Limit</Button>
+          <Button variant={mode === "swap" ? "default" : "outline"} size="sm" onClick={() => { setMode("swap"); onModeChange?.("swap"); }}>Swap</Button>
+          <Button variant={mode === "limit" ? "default" : "outline"} size="sm" onClick={() => { setMode("limit"); onModeChange?.("limit"); }}>Limit</Button>
         </div>
         <div className="flex items-center gap-2">
           {fromToken && toToken && (
@@ -982,84 +1180,73 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
 
       {mode === "limit" && (
         <div className="mt-2 p-3 bg-muted/30 rounded-xl border border-glass space-y-3">
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-muted-foreground">Desired price</span>
-            <div className="flex items-center gap-2">
-              <Input
-                type="text"
-                placeholder="0.0"
-                value={desiredPrice}
-                onChange={(e) => handleDesiredPriceChange(e.target.value)}
-                inputMode="decimal"
-                step="any"
-                className="w-40"
-              />
-              {fromToken && toToken ? (
-                <span className="text-sm text-muted-foreground">
-                  {`${toToken.symbol} per ${fromToken.symbol}`}
-                </span>
-              ) : (
-                <div className="px-2 py-1 rounded-lg bg-amber-100/10 border border-amber-200/50 text-amber-600 dark:text-amber-400 text-xs inline-flex items-center gap-1">
-                  <AlertCircle className="h-3 w-3" /> Select a token pair
+          <div className="grid grid-cols-[140px_1fr_200px] items-center">
+            <div className="flex gap-2">
+              <Button variant={limitSide === "buy" ? "default" : "outline"} size="sm" onClick={() => setLimitSide("buy")}>Buy</Button>
+              <Button variant={limitSide === "sell" ? "default" : "outline"} size="sm" onClick={() => setLimitSide("sell")}>Sell</Button>
+            </div>
+            <div></div>
+            <div></div>
+          </div>
+          <div className="grid grid-cols-[140px_1fr_200px] items-center mt-1">
+            <div></div>
+            <div className="col-span-2">
+              <div className="text-sm text-muted-foreground">
+                <div className="flex items-center justify-end gap-2">
+                  <span className="shrink-0">Available to Trade</span>
+                  <span className="tabular-nums">{limitSide === "buy" ? formatBalance(quoteBalance) : formatBalance(principalBalance)}</span>
+                  <span className="shrink-0">{limitSide === "buy" ? (quoteToken?.symbol || '') : (principalToken?.symbol || '')}</span>
                 </div>
-              )}
+              </div>
             </div>
           </div>
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-muted-foreground">
-              {(() => {
-                const d = parseFloat(desiredPrice || "");
-                if (Number.isFinite(d) && d > 0) {
-                  return (
-                    <>
-                      <span className="mr-3">Desired: 1 {fromToken?.symbol || "FROM"} = {d.toFixed(6)} {toToken?.symbol || "TO"}</span>
-                      <span>Inv: 1 {toToken?.symbol || "TO"} = {(1 / d).toFixed(6)} {fromToken?.symbol || "FROM"}</span>
-                    </>
-                  );
-                }
-                if (Number.isFinite(exchangeRate) && exchangeRate > 0) {
-                  return (
-                    <>
-                      <span className="mr-3">Market: 1 {fromToken?.symbol || "FROM"} = {exchangeRate.toFixed(6)} {toToken?.symbol || "TO"}</span>
-                      <span>Inv: 1 {toToken?.symbol || "TO"} = {(1 / exchangeRate).toFixed(6)} {fromToken?.symbol || "FROM"}</span>
-                    </>
-                  );
-                }
-                return null;
-              })()}
+
+          <div className="grid grid-cols-[140px_1fr_64px] items-center gap-2">
+            <div className="text-sm text-muted-foreground">Price ({quoteToken?.symbol || 'QUOTE'})</div>
+            <div>
+              <Input type="text" placeholder="0.0" value={desiredPrice} onChange={(e)=>handleDesiredPriceChange(e.target.value)} inputMode="decimal" step="any" className="w-full" />
+            </div>
+            <div className="flex justify-end">
+              <Button variant={activeDesired==='market' ? 'default' : 'outline'} size="sm" onClick={setDesiredToMarket} disabled={!fromToken || !toToken}>Mid</Button>
             </div>
           </div>
-          <TooltipProvider>
-            <div className="flex flex-wrap gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant={activeDesired==='market' ? 'default' : 'outline'} size="sm" onClick={setDesiredToMarket} disabled={!fromToken || !toToken}>Market</Button>
-                </TooltipTrigger>
-                <TooltipContent>Set desired price to market rate</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant={activeDesired===1 ? 'default' : 'outline'} size="sm" onClick={() => void applyDesiredPercent(1)} disabled={!fromToken || !toToken}>+1%</Button>
-                </TooltipTrigger>
-                <TooltipContent>Increase desired price by 1%</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant={activeDesired===5 ? 'default' : 'outline'} size="sm" onClick={() => void applyDesiredPercent(5)} disabled={!fromToken || !toToken}>+5%</Button>
-                </TooltipTrigger>
-                <TooltipContent>Increase desired price by 5%</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant={activeDesired===10 ? 'default' : 'outline'} size="sm" onClick={() => void applyDesiredPercent(10)} disabled={!fromToken || !toToken}>+10%</Button>
-                </TooltipTrigger>
-                <TooltipContent>Increase desired price by 10%</TooltipContent>
-              </Tooltip>
+
+          <div className="grid grid-cols-[140px_1fr_64px] items-center gap-2">
+            <div className="text-sm text-muted-foreground">Size</div>
+            <div>
+              <Input type="text" placeholder="0.0" value={sizeAmount} onChange={(e)=>handleSizeAmountChange(e.target.value)} inputMode="decimal" step="any" className="w-full" />
             </div>
-          </TooltipProvider>
+            <div className="text-sm text-muted-foreground text-right">{principalToken?.symbol || ''}</div>
+          </div>
+
+          {(() => {
+            const d = parseFloat(desiredPrice || "");
+            const s = parseFloat(sizeAmount || "");
+            const canShow = Number.isFinite(d) && d > 0 && Number.isFinite(s) && s > 0 && !!quoteToken?.symbol;
+            if (!canShow) return null;
+            const value = d * s;
+            return (
+              <div className="grid grid-cols-[140px_1fr_64px] items-center gap-2">
+                <div className="text-sm text-muted-foreground">Order Value</div>
+                <div className="text-sm font-semibold text-right col-span-2">{value.toFixed(6)} {quoteToken?.symbol}</div>
+              </div>
+            );
+          })()}
+
+          <div className="flex sm:grid sm:grid-cols-[140px_1fr_64px] items-center gap-2 mt-2 sm:mt-0">
+            <div className="hidden sm:block"></div>
+            <div className="flex justify-end gap-2 w-full sm:w-auto">
+              <Button variant="outline" size="sm" onClick={() => applySizeQuick(0.25)} className="flex-1 sm:flex-none">25%</Button>
+              <Button variant="outline" size="sm" onClick={() => applySizeQuick(0.5)} className="flex-1 sm:flex-none">50%</Button>
+              <Button variant="outline" size="sm" onClick={() => applySizeQuick(0.75)} className="flex-1 sm:flex-none">75%</Button>
+              <Button variant="outline" size="sm" onClick={() => applySizeQuick(1)} className="flex-1 sm:flex-none">100%</Button>
+            </div>
+            <div className="hidden sm:block"></div>
+          </div>
         </div>
       )}
 
+      {mode === "swap" && (
       <div className="space-y-2">
         {/* From Token */}
         <div className="bg-muted/50 rounded-2xl p-4 border border-glass relative">
@@ -1101,7 +1288,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
             </div>
           )}
           {walletAddress && fromBalance && (
-            <div className="mt-2 flex justify-end gap-2">
+            <div className="mt-2 flex justify-end gap-2 flex-wrap sm:flex-nowrap">
               <Button variant={activePercent===0.25?"default":"outline"} size="sm" onClick={() => applyFromQuickSelect(0.25)}>25%</Button>
               <Button variant={activePercent===0.5?"default":"outline"} size="sm" onClick={() => applyFromQuickSelect(0.5)}>50%</Button>
               <Button variant={activePercent===0.75?"default":"outline"} size="sm" onClick={() => applyFromQuickSelect(0.75)}>75%</Button>
@@ -1169,6 +1356,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
           )}
         </div>
       </div>
+      )}
 
       {mode === "swap" && fromToken && toToken && exchangeRate && (fromAmount || toAmount) && (
         <div className="mt-4 p-3 bg-muted/30 rounded-xl border border-glass space-y-2">
@@ -1209,7 +1397,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
                 ? !(Number.isFinite(parseFloat(fromAmount || "")) && parseFloat(fromAmount || "") > 0)
                 : !(Number.isFinite(parseFloat(toAmount || "")) && parseFloat(toAmount || "") > 0)
               )
-            : !(Number.isFinite(parseFloat(fromAmount || "")) && parseFloat(fromAmount || "") > 0 && Number.isFinite(parseFloat(desiredPrice || "")) && parseFloat(desiredPrice || "") > 0)
+            : !(Number.isFinite(parseFloat(sizeAmount || "")) && parseFloat(sizeAmount || "") > 0 && Number.isFinite(parseFloat(desiredPrice || "")) && parseFloat(desiredPrice || "") > 0)
           ) ||
           pricesLoading ||
           quoting ||
@@ -1223,7 +1411,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
               : pricesLoading
                 ? 'Loading price...'
                 : (!walletAddress ? 'Connect wallet to swap' : 'Swap'))
-          : (!walletAddress ? 'Connect wallet to place order' : 'Place Limit Order')}
+          : (!walletAddress ? 'Connect wallet to place order' : `${limitSide === 'buy' ? 'Buy' : 'Sell'} ${principalToken?.symbol || ''}`)}
       </Button>
     </Card>
 
@@ -1252,6 +1440,8 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
       chainId={currentNetwork?.chainId}
       txHash={txHash}
     />
+
+    
     </>
   );
 };

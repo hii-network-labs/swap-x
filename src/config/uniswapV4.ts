@@ -32,7 +32,8 @@ export const getUniswapV4Addresses = (chainId: number) => {
   const permit2 = import.meta.env.VITE_V4_PERMIT2 as string | undefined;
   const quoter = import.meta.env.VITE_V4_QUOTER as string | undefined;
   const universalRouter = import.meta.env.VITE_V4_UNIVERSAL_ROUTER as string | undefined;
-
+  const relayOrderReactor = import.meta.env.VITE_RELAY_ORDER_REACTOR as string | undefined;
+  
   if (
     envChainId !== undefined &&
     chainId === envChainId &&
@@ -45,6 +46,7 @@ export const getUniswapV4Addresses = (chainId: number) => {
       permit2,
       quoter,
       universalRouter,
+      relayOrderReactor
     } as const;
   }
 

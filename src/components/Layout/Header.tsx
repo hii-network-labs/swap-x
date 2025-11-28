@@ -59,10 +59,10 @@ export const Header = () => {
 
   return (
     <header className="border-b border-glass backdrop-blur-xl bg-glass sticky top-0 z-50">
-      <div className="container mx-auto px-4 py-4">
+      <div className="container mx-auto px-4 py-3 sm:py-4">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-8">
-            <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+          <div className="flex items-center gap-4 md:gap-8">
+            <h1 className="text-xl md:text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
               SwapX
             </h1>
             <nav className="hidden md:flex gap-6">
@@ -96,9 +96,11 @@ export const Header = () => {
               <Button
                 onClick={connectWallet}
                 className="bg-gradient-primary hover:opacity-90 transition-opacity"
+                size="sm"
               >
                 <Wallet className="mr-2 h-4 w-4" />
-                Connect Wallet
+                <span className="hidden sm:inline">Connect Wallet</span>
+                <span className="sm:hidden">Connect</span>
               </Button>
             ) : (
               <DropdownMenu>

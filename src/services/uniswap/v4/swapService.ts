@@ -1,4 +1,4 @@
-import { Address, decodeErrorResult, keccak256 } from "viem";
+import { Address, decodeErrorResult, keccak256, recoverTypedDataAddress } from "viem";
 import { Token } from "@uniswap/sdk-core";
 import { Actions, V4Planner, SwapExactInSingle } from "@uniswap/v4-sdk";
 import { encodeAbiParameters } from "viem";
@@ -6,7 +6,7 @@ import { getUniswapV4Addresses, ERC20_ABI, PERMIT2_ABI, UNIVERSAL_ROUTER_ABI } f
 import { ZERO_ADDRESS, fetchTokenInfo, isNativeETH } from "./helpers";
 import { getPool } from "./poolService";
 import { quoteExactInputSingle, estimateExactInput } from "./quoteService";
-import { BigNumber } from "ethers";
+import { BigNumber, ethers } from "ethers";
 // removed unused imports to avoid Vite resolution errors
 
 interface SwapParams {
@@ -330,16 +330,19 @@ interface LimitOrderParams {
   tokenOut: Address;
   amountInHuman: number;
   desiredPrice: number;
+  uiDesiredPrice?: number;
+  uiSize?: number;
   tickSpacing: number;
   fee?: number;
   recipient?: Address;
   hooks?: Address;
   ttlSeconds?: number;
   account?: Address;
+  side: 'buy' | 'sell'; // Explicit side from UI
 }
 
 export async function createLimitOrder(params: LimitOrderParams) {
-  const { publicClient, walletClient, chainId, tokenIn, tokenOut, amountInHuman, desiredPrice, tickSpacing, fee, recipient, hooks = ZERO_ADDRESS as Address, ttlSeconds = 3600 } = params;
+  const { publicClient, walletClient, chainId, tokenIn, tokenOut, amountInHuman, desiredPrice, uiDesiredPrice, uiSize, tickSpacing, fee, recipient, hooks = ZERO_ADDRESS as Address, ttlSeconds = 3600, side } = params;
   if (!publicClient || !walletClient) {
     console.log("Step 0: Missing clients", { publicClient: !!publicClient, walletClient: !!walletClient });
     throw new Error("Missing clients");
@@ -350,7 +353,7 @@ export async function createLimitOrder(params: LimitOrderParams) {
     throw new Error("Universal Router not configured for chain");
   }
   console.group("🟦 Service/LimitOrder/createLimitOrder");
-  console.log("Step 0: Input params", { chainId, tokenIn, tokenOut, amountInHuman, desiredPrice, tickSpacing, fee, recipient, hooks, ttlSeconds });
+  console.log("Step 0: Input params", { chainId, tokenIn, tokenOut, amountInHuman, desiredPrice, uiDesiredPrice, uiSize, tickSpacing, fee, recipient, hooks, ttlSeconds });
 
   console.log("Step 1: Fetch token info/start");
   let tokenInInfo, tokenOutInfo;
@@ -442,27 +445,59 @@ export async function createLimitOrder(params: LimitOrderParams) {
   console.log("Step 7: Resolve poolKey/success", { poolKey });
 
   console.log("Step 8: Compute amountOutMinimum/start");
-  const desiredOutHuman = amountInHuman * desiredPrice;
-  const amountOutMinimum = BigInt(Math.floor(desiredOutHuman * Math.pow(10, tokenB.decimals))).toString();
-  console.log("Step 8: Compute amountOutMinimum/success", { desiredOutHuman, amountOutMinimum });
+  
+  // Calculate minimum output based on desired price (limit order)
+  // desiredPrice = how many output tokens per input token user wants
+  // E.g., desiredPrice=2.0 means 1 NONO3 → 2 NONA minimum
+  // Use 1e9 multiplier for maximum precision (9 decimal places)
+  const desiredOutputWei = (amountInWei * BigInt(Math.floor(desiredPrice * 1_000_000_000))) / 1_000_000_000n;
+  
+  // For Limit Orders, we want strict adherence to the desired price.
+  // However, we MUST deduct the pool fee, otherwise the order will never fill at the exact price
+  // because the pool always takes a cut (e.g. 0.3%).
+  // So minOutput = (Input * Price) * (1 - Fee).
+  const feeBips = BigInt(resolvedFee); // e.g. 3000
+  const amountAfterFee = (desiredOutputWei * (1000000n - feeBips)) / 1000000n;
+  
+  const slippagePercent = 0; 
+  const amountOutMinRaw = amountAfterFee; // Deduct fee, but no extra slippage
+  const amountOutMinimum = amountOutMinRaw.toString();
+  
+  console.log("Step 8: Compute amountOutMinimum/success", { 
+    desiredPrice, 
+    desiredOutputWei: desiredOutputWei.toString(),
+    slippagePercent, 
+    amountOutMinimum 
+  });
 
   console.log("Step 9: Build V4 actions/start");
   const swapConfig: SwapExactInSingle = { poolKey, zeroForOne, amountIn: amountInWei.toString(), amountOutMinimum, hookData: "0x" };
   const v4Planner = new V4Planner();
   v4Planner.addAction(Actions.SWAP_EXACT_IN_SINGLE, [swapConfig]);
-  v4Planner.addAction(Actions.SETTLE_ALL, [inputCurrency, amountInWei.toString()]);
+  // CRITICAL: payerIsUser=false means use msg.sender (UR) balance (sent by Reactor), not pull via Permit2!
+  v4Planner.addAction(Actions.SETTLE, [inputCurrency, amountInWei.toString(), false]);
   v4Planner.addAction(Actions.TAKE, [outputCurrency, recipient ?? payer, "0"]);
   const encodedActions = v4Planner.finalize() as `0x${string}`;
   console.log("Step 9: Build V4 actions/success", { encodedActionsLen: encodedActions.length, head: encodedActions.slice(0, 66) });
 
   console.log("Step 10: Build UR commands/start");
-  let commands = "0x" as `0x${string}`;
-  const inputs: `0x${string}`[] = [];
-  commands = (commands + "10") as `0x${string}`;
-  inputs.push(encodedActions);
+  // Manual encoding to avoid JSBI issues with RoutePlanner in Vite
+  const commands = "0x10" as `0x${string}`; // CommandType.V4_SWAP = 0x10
+  const inputs: `0x${string}`[] = [encodedActions];
   console.log("Step 10: Build UR commands/success", { commands, inputsCount: inputs.length });
 
   const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+
+  // Use ethers Interface encoding (like script) instead of viem to ensure compatibility
+  const universalRouterInterface = new ethers.utils.Interface([
+    'function execute(bytes commands, bytes[] inputs, uint256 deadline) external payable'
+  ]);
+  
+  const universalRouterCalldata = universalRouterInterface.encodeFunctionData('execute', [
+    commands,
+    inputs,
+    deadline.toString() // ethers expects string for uint256
+  ]) as `0x${string}`;
 
   // Build RelayOrder using SDK
   console.log("Step 11: Build RelayOrder with SDK/start");
@@ -474,7 +509,9 @@ export async function createLimitOrder(params: LimitOrderParams) {
   const now = BigInt(Math.floor(Date.now() / 1000));
   const deadlineTs = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
   const fillerFeeAmount = (amountInWei * BigInt(FILLER_FEE_BPS)) / 10_000n;
-  const nonce = now * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000));
+  
+  // Use simple random nonce like script (for testing)
+  const nonce = BigInt(Math.floor(Math.random() * 1_000_000));
 
   const relayOrder = {
     reactor: RELAY_ORDER_REACTOR,
@@ -491,9 +528,9 @@ export async function createLimitOrder(params: LimitOrderParams) {
       startAmount: fillerFeeAmount,
       endAmount: fillerFeeAmount,
       startTime: now,
-      endTime: deadlineTs,
+      endTime: deadlineTs - 60n, // Fee window: 60 seconds before deadline
     },
-    universalRouterCalldata: encodedActions as `0x${string}`,
+    universalRouterCalldata: universalRouterCalldata,
   } as const;
   console.log("Step 11: Construct RelayOrder/success", {
     reactor: relayOrder.reactor,
@@ -504,15 +541,40 @@ export async function createLimitOrder(params: LimitOrderParams) {
     feeStart: relayOrder.fee.startAmount.toString(),
   });
 
-  console.log("Step 12: Sign RelayOrder/start");
-  const domain = { name: "RelayOrder", chainId, verifyingContract: relayOrder.reactor } as const;
-  const types = {
+  console.log("Step 12: Sign with Permit2 EIP-712/start");
+  
+  // Permit2 domain (standard Permit2 contract)
+  const permit2Domain = {
+    name: "Permit2",
+    chainId,
+    verifyingContract: addresses.permit2 as Address,
+  } as const;
+
+  // Permit2 types (MUST match UniswapX SDK RELAY_WITNESS_TYPES exactly)
+  const permit2Types = {
+    TokenPermissions: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    PermitBatchWitnessTransferFrom: [
+      { name: "permitted", type: "TokenPermissions[]" },
+      { name: "spender", type: "address" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "witness", type: "RelayOrder" },
+    ],
+    RelayOrderInfo: [
+      { name: "reactor", type: "address" },
+      { name: "swapper", type: "address" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+    ],
     Input: [
       { name: "token", type: "address" },
       { name: "amount", type: "uint256" },
       { name: "recipient", type: "address" },
     ],
-    Fee: [
+    FeeEscalator: [
       { name: "token", type: "address" },
       { name: "startAmount", type: "uint256" },
       { name: "endAmount", type: "uint256" },
@@ -520,46 +582,268 @@ export async function createLimitOrder(params: LimitOrderParams) {
       { name: "endTime", type: "uint256" },
     ],
     RelayOrder: [
-      { name: "reactor", type: "address" },
-      { name: "swapper", type: "address" },
-      { name: "nonce", type: "uint256" },
-      { name: "deadline", type: "uint256" },
+      { name: "info", type: "RelayOrderInfo" },
       { name: "input", type: "Input" },
-      { name: "fee", type: "Fee" },
+      { name: "fee", type: "FeeEscalator" },
       { name: "universalRouterCalldata", type: "bytes" },
     ],
   } as const;
-  const message = {
-    reactor: relayOrder.reactor,
-    swapper: relayOrder.swapper,
+
+  // Permit2 message (MUST match SDK toPermit() and witness() structure)
+  const permit2Message = {
+    permitted: [
+      {
+        token: relayOrder.input.token,
+        amount: relayOrder.input.amount,
+      },
+      {
+        token: relayOrder.fee.token,
+        amount: relayOrder.fee.endAmount, // SDK uses endAmount for permission
+      },
+    ],
+    spender: RELAY_ORDER_REACTOR,
     nonce: relayOrder.nonce,
     deadline: relayOrder.deadline,
-    input: relayOrder.input,
-    fee: relayOrder.fee,
-    universalRouterCalldata: relayOrder.universalRouterCalldata,
+    witness: {
+      info: {
+        reactor: relayOrder.reactor,
+        swapper: relayOrder.swapper,
+        nonce: relayOrder.nonce,
+        deadline: relayOrder.deadline,
+      },
+      input: relayOrder.input,
+      fee: relayOrder.fee,
+      universalRouterCalldata: relayOrder.universalRouterCalldata,
+    },
   } as const;
+
   let signature: `0x${string}` | undefined;
   try {
-    signature = await walletClient.signTypedData?.({ account: payer, domain, types, primaryType: "RelayOrder", message });
-    console.log("Step 12: Sign RelayOrder/success", { signatureLen: signature?.length });
+    // CRITICAL: Verify account before signing
+    console.log("Step 12.1: Verify signing account", {
+      swapper: payer,
+      reactor: RELAY_ORDER_REACTOR,
+      permit2: addresses.permit2,
+    });
+    
+    // Debug: Log the exact message being signed
+    console.log("Step 12.2: Permit2 message to sign", {
+      permitted: permit2Message.permitted,
+      spender: permit2Message.spender,
+      nonce: permit2Message.nonce.toString(),
+      deadline: permit2Message.deadline.toString(),
+      witnessReactor: permit2Message.witness.info.reactor,
+      witnessSwapper: permit2Message.witness.info.swapper,
+    });
+    
+    signature = await walletClient.signTypedData?.({
+      account: payer, // MUST match relayOrder.swapper
+      domain: permit2Domain,
+      types: permit2Types,
+      primaryType: "PermitBatchWitnessTransferFrom",
+      message: permit2Message as any,
+    });
+    
+    console.log("Step 12: Permit2 signature/success", {
+      signatureLen: signature?.length,
+      signaturePreview: signature?.slice(0, 20) + '...' + signature?.slice(-10)
+    });
   } catch (sigErr) {
-    console.log("Step 12: Sign RelayOrder/failed", sigErr);
+    console.log("Step 12: Sign Permit2/failed", sigErr);
     console.groupEnd();
     throw sigErr;
   }
 
+  // Verify locally signer == swapper to avoid server mismatch
+  try {
+    const recovered = await recoverTypedDataAddress({
+      domain: permit2Domain,
+      types: permit2Types,
+      primaryType: "PermitBatchWitnessTransferFrom",
+      message: permit2Message as any,
+      signature: signature as `0x${string}`,
+    });
+    const match = recovered.toLowerCase() === (payer as string).toLowerCase();
+    console.log("Step 12.3: Local recover", { recovered, expected: payer, match });
+    if (!match) {
+      console.groupEnd();
+      throw new Error(`Recovered signer ${recovered} does not equal maker ${payer}`);
+    }
+  } catch (verErr) {
+    console.log("Step 12.3: Local recover/failed", verErr);
+    console.groupEnd();
+    throw verErr;
+  }
+
+  // Local verification to ensure signer matches maker
+  try {
+    const recovered = await recoverTypedDataAddress({
+      domain: permit2Domain,
+      types: permit2Types,
+      primaryType: "PermitBatchWitnessTransferFrom",
+      message: permit2Message as any,
+      signature: signature as `0x${string}`,
+    });
+    const match = recovered.toLowerCase() === payer.toLowerCase();
+    console.log("Step 12.3: Local recover", { recovered, expected: payer, match });
+    if (!match) {
+      console.groupEnd();
+      throw new Error(`Recovered signer ${recovered} does not equal maker ${payer}`);
+    }
+  } catch (verErr) {
+    console.log("Step 12.3: Local recover/failed", verErr);
+    console.groupEnd();
+    throw verErr;
+  }
+
   console.log("Step 13: Submit RelayOrder/start");
   const orderPayload = {
-    reactor: message.reactor,
-    swapper: message.swapper,
-    nonce: message.nonce.toString(),
-    deadline: message.deadline.toString(),
-    input: { token: message.input.token, amount: message.input.amount.toString(), recipient: message.input.recipient },
-    fee: { token: message.fee.token, startAmount: message.fee.startAmount.toString(), endAmount: message.fee.endAmount.toString(), startTime: message.fee.startTime.toString(), endTime: message.fee.endTime.toString() },
-    universalRouterCalldata: message.universalRouterCalldata,
+    reactor: relayOrder.reactor,
+    swapper: relayOrder.swapper,
+    nonce: relayOrder.nonce.toString(),
+    deadline: relayOrder.deadline.toString(),
+    input: { token: relayOrder.input.token, amount: relayOrder.input.amount.toString(), recipient: relayOrder.input.recipient },
+    fee: { token: relayOrder.fee.token, startAmount: relayOrder.fee.startAmount.toString(), endAmount: relayOrder.fee.endAmount.toString(), startTime: relayOrder.fee.startTime.toString(), endTime: relayOrder.fee.endTime.toString() },
+    universalRouterCalldata: relayOrder.universalRouterCalldata,
   };
+  
+  // Encode order to bytes using ABI encoding
+  console.log("Step 13.1: Encode order to bytes/start");
+  const orderBytes = encodeAbiParameters(
+    [
+      {
+        name: "order",
+        type: "tuple",
+        components: [
+          { name: "reactor", type: "address" },
+          { name: "swapper", type: "address" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+          {
+            name: "input",
+            type: "tuple",
+            components: [
+              { name: "token", type: "address" },
+              { name: "amount", type: "uint256" },
+              { name: "recipient", type: "address" },
+            ],
+          },
+          {
+            name: "fee",
+            type: "tuple",
+            components: [
+              { name: "token", type: "address" },
+              { name: "startAmount", type: "uint256" },
+              { name: "endAmount", type: "uint256" },
+              { name: "startTime", type: "uint256" },
+              { name: "endTime", type: "uint256" },
+            ],
+          },
+          { name: "universalRouterCalldata", type: "bytes" },
+        ],
+      },
+    ],
+    [
+      {
+        reactor: orderPayload.reactor as Address,
+        swapper: orderPayload.swapper as Address,
+        nonce: BigInt(orderPayload.nonce),
+        deadline: BigInt(orderPayload.deadline),
+        input: {
+          token: orderPayload.input.token as Address,
+          amount: BigInt(orderPayload.input.amount),
+          recipient: orderPayload.input.recipient as Address,
+        },
+        fee: {
+          token: orderPayload.fee.token as Address,
+          startAmount: BigInt(orderPayload.fee.startAmount),
+          endAmount: BigInt(orderPayload.fee.endAmount),
+          startTime: BigInt(orderPayload.fee.startTime),
+          endTime: BigInt(orderPayload.fee.endTime),
+        },
+        universalRouterCalldata: orderPayload.universalRouterCalldata as `0x${string}`,
+      },
+    ]
+  ) as `0x${string}`;
+  
+  console.log("Step 13.1: Encode order/success", {
+    bytesLength: orderBytes.length,
+    bytesPreview: orderBytes.slice(0, 66) + '...'
+  });
+  
   try {
-    const resp = await fetch("http://localhost:3000/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order: orderPayload, signature }) });
+    // FIX: Standardize Price Calculation based on Anchor/Quote roles
+    // User Rules:
+    // 1. If pair has Stable (USDT, USDC, HNC), the OTHER token is Anchor (Base).
+    // 2. If HNC/Stable, HNC is Anchor.
+    // 3. If USDT/USDC, sort by address.
+    // 4. Default: Sort by address (Token0 is Anchor).
+    
+    const getAnchorToken = (tA: Token, tB: Token) => {
+      const sA = tA.symbol?.toUpperCase() || '';
+      const sB = tB.symbol?.toUpperCase() || '';
+      const STABLES = new Set(['USDT', 'USDC', 'HNC']);
+      const isStableA = STABLES.has(sA);
+      const isStableB = STABLES.has(sB);
+      
+      if (isStableA && !isStableB) return tB; // tB is Anchor
+      if (!isStableA && isStableB) return tA; // tA is Anchor
+      if (isStableA && isStableB) {
+        if (sA === 'HNC') return tA;
+        if (sB === 'HNC') return tB;
+        // Both stables, neither HNC -> sort by address
+        return tA.address.toLowerCase() < tB.address.toLowerCase() ? tA : tB;
+      }
+      // Neither stable -> sort by address
+      return tA.address.toLowerCase() < tB.address.toLowerCase() ? tA : tB;
+    };
+
+    const anchorToken = getAnchorToken(tokenA, tokenB);
+    const isInputAnchor = inputCurrency.toLowerCase() === anchorToken.address.toLowerCase();
+    
+    // Price Definition: Quote / Anchor
+    // If Input is Anchor: Output is Quote. desiredPrice (Out/In) = Quote/Anchor. ✅
+    // If Input is Quote: Output is Anchor. desiredPrice (Out/In) = Anchor/Quote. ❌ -> Invert!
+    
+    const finalUiPrice = isInputAnchor 
+      ? (uiDesiredPrice || desiredPrice) 
+      : (1 / (uiDesiredPrice || desiredPrice));
+
+    const payload = { 
+      order: orderBytes, 
+      signature,
+      outputToken: outputCurrency as Address,
+      minOutputAmount: amountOutMinimum,
+      uiPrice: finalUiPrice.toFixed(12),
+      side: side, 
+      debug: {
+        uiDesiredPrice,
+        desiredPrice,
+        finalUiPrice,
+        isInputAnchor,
+        anchorSymbol: anchorToken.symbol,
+        inputHuman: amountInHuman,
+        inputToken: inputCurrency,
+        outputToken: outputCurrency,
+        zeroForOne,
+        side,
+      }
+    };
+    console.log("Step 13.2: POST to server", {
+      orderBytesLength: orderBytes.length,
+      signatureLength: signature?.length,
+      outputToken: outputCurrency,
+      minOutputAmount: amountOutMinimum
+    });
+    
+    const ORDER_SERVER = (import.meta.env.VITE_ORDER_SERVER as string | undefined) || "http://localhost:3000";
+  
+    const resp = await fetch(`${ORDER_SERVER}/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    
     console.log("Step 13: Response status", resp.status);
     if (!resp.ok) {
       let msg = `Order submit failed (${resp.status})`;

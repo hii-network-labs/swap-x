@@ -93,7 +93,7 @@ const History = () => {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table className="min-w-[780px]">
+              <Table className="min-w-[680px] sm:min-w-[780px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="whitespace-nowrap">Time</TableHead>

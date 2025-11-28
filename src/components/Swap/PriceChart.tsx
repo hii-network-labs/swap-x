@@ -8,10 +8,16 @@ import { Loader2 } from "lucide-react";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useSubgraphPools } from "@/hooks/useSubgraphPools";
 import { getCommonTokens } from "@/config/uniswap";
+import { TokenSelector } from "./TokenSelector";
+import { ZERO_ADDRESS } from "@/services/uniswap/v4/helpers";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import { fetchPoolPriceFromIndexer } from "@/services/uniswap/v4/quoteService";
 
 interface PriceChartProps {
   fromToken: Token | null;
   toToken: Token | null;
+  onSelectFromToken?: (token: Token) => void;
+  onSelectToToken?: (token: Token) => void;
 }
 
 type TimeRange = "1" | "7" | "30";
@@ -98,12 +104,13 @@ const generateSeededFallbackChartData = (days: TimeRange, seedKey: string) => {
   return data;
 };
 
-export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
+export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToToken }: PriceChartProps) => {
   const [timeRange, setTimeRange] = useState<TimeRange>("7");
   const [isPriceIncreasing, setIsPriceIncreasing] = useState<boolean | null>(null);
   const previousRateRef = useRef<number | null>(null);
   const { currentNetwork } = useNetwork();
   const { pools } = useSubgraphPools();
+  const [pairRealtimeRate, setPairRealtimeRate] = useState<number | null>(null);
 
   // Default tokens so the chart loads immediately on first render
   const isHii = currentNetwork?.chainId === 22469;
@@ -133,6 +140,92 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
   const haveSelectedPair = !!(fromToken && toToken);
   const baseFrom = haveSelectedPair ? fromToken! : DEFAULT_FROM;
   const baseTo = haveSelectedPair ? toToken! : DEFAULT_TO;
+
+  const allTokens: Token[] = (() => {
+    const map = new Map<string, Token>();
+    for (const p of pools) {
+      if (p.token0?.id && p.token0?.symbol) {
+        const addr = p.token0.id.toLowerCase();
+        const isHii = currentNetwork?.chainId === 22469;
+        const isZero = addr === ZERO_ADDRESS.toLowerCase();
+        const symbol = isZero && isHii ? "HNC" : p.token0.symbol;
+        const name = isZero && isHii ? "HNC" : (p.token0.name || p.token0.symbol);
+        if (!map.has(addr)) map.set(addr, { symbol, name, logo: symbol.substring(0,1), address: addr, coingeckoId: "" });
+      }
+      if (p.token1?.id && p.token1?.symbol) {
+        const addr = p.token1.id.toLowerCase();
+        const isHii = currentNetwork?.chainId === 22469;
+        const isZero = addr === ZERO_ADDRESS.toLowerCase();
+        const symbol = isZero && isHii ? "HNC" : p.token1.symbol;
+        const name = isZero && isHii ? "HNC" : (p.token1.name || p.token1.symbol);
+        if (!map.has(addr)) map.set(addr, { symbol, name, logo: symbol.substring(0,1), address: addr, coingeckoId: "" });
+      }
+    }
+    if (currentNetwork?.chainId === 22469) {
+      const zero = ZERO_ADDRESS.toLowerCase();
+      if (!map.has(zero)) map.set(zero, { symbol: "HNC", name: "HNC", logo: "H", address: zero, coingeckoId: "" });
+    }
+    return Array.from(map.values());
+  })();
+
+  const adjacency: Record<string, Set<string>> = (() => {
+    const adj: Record<string, Set<string>> = {};
+    for (const p of pools) {
+      const a = p.token0?.id?.toLowerCase();
+      const b = p.token1?.id?.toLowerCase();
+      const liq = parseFloat(p.liquidity || "0");
+      if (!a || !b || !(Number.isFinite(liq) && liq > 0)) continue;
+      if (!adj[a]) adj[a] = new Set<string>();
+      if (!adj[b]) adj[b] = new Set<string>();
+      adj[a].add(b);
+      adj[b].add(a);
+    }
+    return adj;
+  })();
+  const allowedToAddresses = baseFrom ? Array.from(adjacency[baseFrom.address?.toLowerCase()] || []) : [];
+
+  const pairOptions = pools
+    .map((p) => {
+      const a: Token = { address: p.token0.id.toLowerCase(), symbol: p.token0.symbol, name: p.token0.symbol, logo: (p.token0.symbol || "").slice(0,1), coingeckoId: "" };
+      const b: Token = { address: p.token1.id.toLowerCase(), symbol: p.token1.symbol, name: p.token1.symbol, logo: (p.token1.symbol || "").slice(0,1), coingeckoId: "" };
+      const liq = parseFloat(p.liquidity || "0");
+      return { id: p.id, a, b, liq };
+    })
+    .filter((x) => Number.isFinite(x.liq) && x.liq > 0);
+  const currentPairId = (() => {
+    const f = baseFrom.address?.toLowerCase();
+    const t = baseTo.address?.toLowerCase();
+    const hit = pairOptions.find((opt) => {
+      const a = opt.a.address.toLowerCase();
+      const b = opt.b.address.toLowerCase();
+      return (a === f && b === t) || (a === t && b === f);
+    });
+    return hit?.id;
+  })();
+
+  // Fetch realtime pool price for current pair and derive rate in FROM→TO orientation
+  useEffect(() => {
+    if (!currentPairId || !baseFrom?.address || !baseTo?.address) {
+      setPairRealtimeRate(null);
+      return;
+    }
+    const run = async () => {
+      try {
+        const price = await fetchPoolPriceFromIndexer(currentPairId);
+        if (price) {
+          const pool = pools.find((p) => p.id === currentPairId);
+          if (pool) {
+            const isFromToken0 = baseFrom.address.toLowerCase() === pool.token0?.id?.toLowerCase();
+            const rate = isFromToken0 ? price.price : price.inversePrice;
+            if (Number.isFinite(rate) && rate > 0) setPairRealtimeRate(rate);
+          }
+        }
+      } catch {}
+    };
+    run();
+    const h = setInterval(run, 10_000);
+    return () => clearInterval(h);
+  }, [currentPairId, baseFrom?.address, baseTo?.address, pools]);
 
   const baseUSDT = (import.meta.env.VITE_USDT_ADDRESS as string | undefined);
   const baseUSDC = (import.meta.env.VITE_USDC_ADDRESS as string | undefined);
@@ -261,7 +354,9 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
     if (Number.isFinite(pf) && Number.isFinite(pt) && pt > 0) return pf / pt;
     return NaN;
   })();
-  const effectiveCurrentRate = Number.isFinite(derivedCurrentRateUSD) ? derivedCurrentRateUSD : currentRate;
+  const effectiveCurrentRate = Number.isFinite(pairRealtimeRate as number) && (pairRealtimeRate as number) > 0
+    ? (pairRealtimeRate as number)
+    : (Number.isFinite(derivedCurrentRateUSD) ? derivedCurrentRateUSD : currentRate);
   if (chartData.length > 0 && Number.isFinite(effectiveCurrentRate) && effectiveCurrentRate > 0) {
     chartData[chartData.length - 1].rate = effectiveCurrentRate;
   }
@@ -281,14 +376,28 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
   return (
     <Card className="p-6 bg-card/80 backdrop-blur-xl border-glass space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2 relative z-10 w-full">
-        <div className="min-w-0">
-          <h3 className="font-semibold text-lg">
-            {baseFrom.symbol}/{baseTo.symbol}
-          </h3>
+        <div className="min-w-0 flex items-center gap-2">
+          <Select value={currentPairId ?? undefined} onValueChange={(id) => {
+            const opt = pairOptions.find((x) => x.id === id);
+            if (!opt) return;
+            onSelectFromToken?.(opt.a);
+            onSelectToToken?.(opt.b);
+          }}>
+            <SelectTrigger className="w-[160px] sm:w-[200px]">
+              <SelectValue placeholder={`${baseFrom.symbol}/${baseTo.symbol}`} />
+            </SelectTrigger>
+            <SelectContent>
+              {pairOptions.map((opt) => (
+                <SelectItem key={opt.id} value={opt.id}>
+                  {opt.a.symbol}/{opt.b.symbol}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {!isLoading && chartData.length > 0 && (
             <div className="flex items-center gap-2 mt-1">
               <span 
-                className={`text-2xl font-bold transition-all duration-500 whitespace-nowrap ${
+                className={`text-xl sm:text-2xl font-bold transition-all duration-500 whitespace-nowrap ${
                   isPriceIncreasing === true ? 'text-green-500 animate-pulse' : 
                   isPriceIncreasing === false ? 'text-red-500 animate-pulse' : ''
                 }`}
@@ -296,7 +405,7 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
                 {effectiveCurrentRate.toFixed(6)}
               </span>
               <span 
-                className={`text-sm font-medium transition-colors duration-300 whitespace-nowrap ${
+                className={`text-xs sm:text-sm font-medium transition-colors duration-300 whitespace-nowrap ${
                   priceChange >= 0 ? 'text-green-500' : 'text-red-500'
                 }`}
               >
@@ -306,10 +415,11 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
           )}
         </div>
 
-        <div className="flex gap-2 flex-shrink-0 ml-auto">
+        <div className="flex gap-1 sm:gap-2 flex-shrink-0 ml-auto">
           <Button
             variant={timeRange === "1" ? "default" : "outline"}
             size="sm"
+            className="h-7 px-2 sm:h-9 sm:px-4 text-xs sm:text-sm"
             onClick={() => setTimeRange("1")}
           >
             24H
@@ -317,6 +427,7 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
           <Button
             variant={timeRange === "7" ? "default" : "outline"}
             size="sm"
+            className="h-7 px-2 sm:h-9 sm:px-4 text-xs sm:text-sm"
             onClick={() => setTimeRange("7")}
           >
             7D
@@ -324,6 +435,7 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
           <Button
             variant={timeRange === "30" ? "default" : "outline"}
             size="sm"
+            className="h-7 px-2 sm:h-9 sm:px-4 text-xs sm:text-sm"
             onClick={() => setTimeRange("30")}
           >
             30D
@@ -331,9 +443,9 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
         </div>
       </div>
 
-      <div className="relative z-0 mt-2">
-      <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 15 }}>
+      <div className="relative z-0 mt-2 h-[200px] sm:h-[300px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
           <XAxis 
             dataKey="time" 
@@ -346,7 +458,7 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
             fontSize={12}
             tickLine={false}
             domain={['auto', 'auto']}
-            width={90}
+            width={60}
             tickMargin={8}
             tickFormatter={(value) => value.toFixed(6)}
           />
@@ -376,7 +488,7 @@ export const PriceChart = ({ fromToken, toToken }: PriceChartProps) => {
       </ResponsiveContainer>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 pt-4 border-t text-sm">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4 pt-2 sm:pt-4 border-t text-xs sm:text-sm">
         <div>
           <div className="text-muted-foreground mb-1">Lowest</div>
           <div className="font-semibold">
