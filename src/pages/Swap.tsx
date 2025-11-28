@@ -28,6 +28,7 @@ const Swap = () => {
 
   const { currentNetwork, walletAddress } = useNetwork();
   const ORDER_SERVER = (import.meta.env.VITE_ORDER_SERVER as string | undefined) || "http://localhost:3000";
+  console.log("ORDER_SERVER:", ORDER_SERVER);
   const pairKey = `${fromToken?.address || ""}-${toToken?.address || ""}`;
   const { pools } = useSubgraphPools();
   const decimalsMap = useMemo(() => {

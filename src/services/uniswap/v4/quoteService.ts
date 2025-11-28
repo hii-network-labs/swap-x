@@ -21,8 +21,8 @@ export async function fetchPoolPriceFromIndexer(poolId: string): Promise<{
   lastUpdated: string;
 } | null> {
   try {
-    // TODO: Use env variable for API URL
-    const apiUrl = `http://localhost:3001/indexer/pools/${poolId}/price`;
+    const apiBase = (import.meta.env.VITE_INDEXER_API_URL as string | undefined) || "http://localhost:3001";
+    const apiUrl = `${apiBase.replace(/\/$/, "")}/indexer/pools/${poolId}/price`;
     const response = await fetch(apiUrl);
     
     if (!response.ok) {

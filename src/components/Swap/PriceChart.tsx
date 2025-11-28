@@ -116,37 +116,24 @@ export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToTo
   const isHii = currentNetwork?.chainId === 22469;
   const DEFAULT_FROM: Token = isHii
     ? {
-        symbol: "HNC",
-        name: "HNC",
-        logo: "⟠",
-        address: "0x0000000000000000000000000000000000000000",
-        coingeckoId: "",
-      }
+      symbol: "HNC",
+      name: "HNC",
+      logo: "⟠",
+      address: "0x0000000000000000000000000000000000000000",
+      coingeckoId: "",
+    }
     : {
-        symbol: "ETH",
-        name: "Ethereum",
-        logo: "⟠",
-        address: "0x0000000000000000000000000000000000000000",
-        coingeckoId: "ethereum",
-      };
-  const DEFAULT_TO: Token = {
-    symbol: "USDC",
-    name: "USD Coin",
-    logo: "💵",
-    address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-    coingeckoId: "usd-coin",
-  };
-  // Use selected pair only when BOTH tokens are chosen; otherwise use defaults
-  const haveSelectedPair = !!(fromToken && toToken);
-  const baseFrom = haveSelectedPair ? fromToken! : DEFAULT_FROM;
-  const baseTo = haveSelectedPair ? toToken! : DEFAULT_TO;
-
+      symbol: "ETH",
+      name: "Ethereum",
+      logo: "⟠",
+      address: "0x0000000000000000000000000000000000000000",
+      coingeckoId: "ethereum",
+    };
   const allTokens: Token[] = (() => {
     const map = new Map<string, Token>();
     for (const p of pools) {
       if (p.token0?.id && p.token0?.symbol) {
         const addr = p.token0.id.toLowerCase();
-        const isHii = currentNetwork?.chainId === 22469;
         const isZero = addr === ZERO_ADDRESS.toLowerCase();
         const symbol = isZero && isHii ? "HNC" : p.token0.symbol;
         const name = isZero && isHii ? "HNC" : (p.token0.name || p.token0.symbol);
@@ -154,19 +141,38 @@ export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToTo
       }
       if (p.token1?.id && p.token1?.symbol) {
         const addr = p.token1.id.toLowerCase();
-        const isHii = currentNetwork?.chainId === 22469;
         const isZero = addr === ZERO_ADDRESS.toLowerCase();
         const symbol = isZero && isHii ? "HNC" : p.token1.symbol;
         const name = isZero && isHii ? "HNC" : (p.token1.name || p.token1.symbol);
         if (!map.has(addr)) map.set(addr, { symbol, name, logo: symbol.substring(0,1), address: addr, coingeckoId: "" });
       }
     }
-    if (currentNetwork?.chainId === 22469) {
+    if (isHii) {
       const zero = ZERO_ADDRESS.toLowerCase();
       if (!map.has(zero)) map.set(zero, { symbol: "HNC", name: "HNC", logo: "H", address: zero, coingeckoId: "" });
     }
     return Array.from(map.values());
   })();
+  // Use selected pair only when BOTH tokens are chosen; otherwise use defaults
+  const haveSelectedPair = !!(fromToken && toToken);
+  const baseFrom = haveSelectedPair ? fromToken! : DEFAULT_FROM;
+  const baseTo = haveSelectedPair ? toToken! : (() => {
+    // Prefer stable available in current pools over hardcoded mainnet
+    const STABLE = new Set(["USDC","USDT","BUSD"]);
+    const stableCand = allTokens.find(t => STABLE.has(t.symbol)) || allTokens[0];
+    return stableCand ?? DEFAULT_FROM; // fallback to from if list empty
+  })();
+
+  // Auto-apply default chart pair to trade selection when entering Limit without tokens
+  const appliedDefaultRef = useRef(false);
+  useEffect(() => {
+    if (!haveSelectedPair && !appliedDefaultRef.current) {
+      onSelectFromToken?.(baseFrom);
+      onSelectToToken?.(baseTo);
+      appliedDefaultRef.current = true;
+    }
+  }, [haveSelectedPair, baseFrom.address, baseTo.address, onSelectFromToken, onSelectToToken]);
+
 
   const adjacency: Record<string, Set<string>> = (() => {
     const adj: Record<string, Set<string>> = {};
@@ -186,8 +192,17 @@ export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToTo
 
   const pairOptions = pools
     .map((p) => {
-      const a: Token = { address: p.token0.id.toLowerCase(), symbol: p.token0.symbol, name: p.token0.symbol, logo: (p.token0.symbol || "").slice(0,1), coingeckoId: "" };
-      const b: Token = { address: p.token1.id.toLowerCase(), symbol: p.token1.symbol, name: p.token1.symbol, logo: (p.token1.symbol || "").slice(0,1), coingeckoId: "" };
+      const isHii = currentNetwork?.chainId === 22469;
+      const aAddr = p.token0.id.toLowerCase();
+      const bAddr = p.token1.id.toLowerCase();
+      const aIsZero = aAddr === ZERO_ADDRESS.toLowerCase();
+      const bIsZero = bAddr === ZERO_ADDRESS.toLowerCase();
+      const aSym = aIsZero && isHii ? "HNC" : (p.token0.symbol || "");
+      const bSym = bIsZero && isHii ? "HNC" : (p.token1.symbol || "");
+      const aName = aIsZero && isHii ? "HNC" : (p.token0.name || p.token0.symbol || "");
+      const bName = bIsZero && isHii ? "HNC" : (p.token1.name || p.token1.symbol || "");
+      const a: Token = { address: aAddr, symbol: aSym, name: aName, logo: (aSym || "").slice(0,1), coingeckoId: "" };
+      const b: Token = { address: bAddr, symbol: bSym, name: bName, logo: (bSym || "").slice(0,1), coingeckoId: "" };
       const liq = parseFloat(p.liquidity || "0");
       return { id: p.id, a, b, liq };
     })

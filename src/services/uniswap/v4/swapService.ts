@@ -837,7 +837,8 @@ export async function createLimitOrder(params: LimitOrderParams) {
     });
     
     const ORDER_SERVER = (import.meta.env.VITE_ORDER_SERVER as string | undefined) || "http://localhost:3000";
-  
+    console.log("ORDER_SERVER:", ORDER_SERVER);
+    
     const resp = await fetch(`${ORDER_SERVER}/orders`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -31,21 +31,27 @@ export async function fetchTokenInfo(
   }
 
   const [symbol, name, decimals] = await Promise.all([
-    client.readContract({
-      address: tokenAddress,
-      abi: ERC20_ABI,
-      functionName: "symbol",
-    }) as Promise<string>,
-    client.readContract({
-      address: tokenAddress,
-      abi: ERC20_ABI,
-      functionName: "name",
-    }) as Promise<string>,
-    client.readContract({
-      address: tokenAddress,
-      abi: ERC20_ABI,
-      functionName: "decimals",
-    }) as Promise<number>,
+    (async () => {
+      try {
+        return await client.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: "symbol" });
+      } catch {
+        return "TOKEN";
+      }
+    })() as Promise<string>,
+    (async () => {
+      try {
+        return await client.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: "name" });
+      } catch {
+        return "Token";
+      }
+    })() as Promise<string>,
+    (async () => {
+      try {
+        return await client.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: "decimals" });
+      } catch {
+        return 18;
+      }
+    })() as Promise<number>,
   ]);
 
   return {
