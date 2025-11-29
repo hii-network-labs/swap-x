@@ -41,12 +41,21 @@ const Swap = () => {
   }, [pools]);
   const symbolMap = useMemo(() => {
     const m: Record<string, string> = {};
+    const isHii = currentNetwork?.chainId === 22469;
+    const ZERO = "0x0000000000000000000000000000000000000000";
+    const normalize = (addr: string, sym?: string) => {
+      const a = addr.toLowerCase();
+      if (isHii && a === ZERO) return "HNC";
+      if (isHii && (sym === "WETH" || sym === "WHNC")) return "HNC";
+      return String(sym || "");
+    };
     for (const p of pools) {
-      m[p.token0.id.toLowerCase()] = String(p.token0.symbol || "");
-      m[p.token1.id.toLowerCase()] = String(p.token1.symbol || "");
+      m[p.token0.id.toLowerCase()] = normalize(p.token0.id, p.token0.symbol);
+      m[p.token1.id.toLowerCase()] = normalize(p.token1.id, p.token1.symbol);
     }
+    if (isHii && !m[ZERO]) m[ZERO] = "HNC";
     return m;
-  }, [pools]);
+  }, [pools, currentNetwork?.chainId]);
   const [isLimitMode, setIsLimitMode] = useState(false);
   const [obSort, setObSort] = useState(true);
   const fromDecimals = fromToken ? (decimalsMap[fromToken.address.toLowerCase()] ?? (["USDC","USDT"].includes(fromToken.symbol) ? 6 : 18)) : 18;
