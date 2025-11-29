@@ -116,19 +116,19 @@ export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToTo
   const isHii = currentNetwork?.chainId === 22469;
   const DEFAULT_FROM: Token = isHii
     ? {
-      symbol: "HNC",
-      name: "HNC",
-      logo: "⟠",
-      address: "0x0000000000000000000000000000000000000000",
-      coingeckoId: "",
-    }
+        symbol: "HNC",
+        name: "HNC",
+        logo: "⟠",
+        address: "0x0000000000000000000000000000000000000000",
+        coingeckoId: "",
+      }
     : {
-      symbol: "ETH",
-      name: "Ethereum",
-      logo: "⟠",
-      address: "0x0000000000000000000000000000000000000000",
-      coingeckoId: "ethereum",
-    };
+        symbol: "ETH",
+        name: "Ethereum",
+        logo: "⟠",
+        address: "0x0000000000000000000000000000000000000000",
+        coingeckoId: "ethereum",
+      };
   const allTokens: Token[] = (() => {
     const map = new Map<string, Token>();
     for (const p of pools) {
@@ -156,24 +156,7 @@ export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToTo
   // Use selected pair only when BOTH tokens are chosen; otherwise use defaults
   const haveSelectedPair = !!(fromToken && toToken);
   const baseFrom = haveSelectedPair ? fromToken! : DEFAULT_FROM;
-  const baseTo = haveSelectedPair ? toToken! : (() => {
-    // Prefer stable available in current pools over hardcoded mainnet
-    const STABLE = new Set(["USDC","USDT","BUSD"]);
-    const stableCand = allTokens.find(t => STABLE.has(t.symbol)) || allTokens[0];
-    return stableCand ?? DEFAULT_FROM; // fallback to from if list empty
-  })();
-
-  // Auto-apply default chart pair to trade selection when entering Limit without tokens
-  const appliedDefaultRef = useRef(false);
-  useEffect(() => {
-    if (!haveSelectedPair && !appliedDefaultRef.current) {
-      onSelectFromToken?.(baseFrom);
-      onSelectToToken?.(baseTo);
-      appliedDefaultRef.current = true;
-    }
-  }, [haveSelectedPair, baseFrom.address, baseTo.address, onSelectFromToken, onSelectToToken]);
-
-
+  // Build adjacency map early for default target resolution
   const adjacency: Record<string, Set<string>> = (() => {
     const adj: Record<string, Set<string>> = {};
     for (const p of pools) {
@@ -188,6 +171,28 @@ export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToTo
     }
     return adj;
   })();
+  const baseTo = haveSelectedPair ? toToken! : (() => {
+    const STABLE = new Set(["USDC","USDT","BUSD"]);
+    const fromAddrLower = baseFrom.address?.toLowerCase();
+    const connectedAddrs = fromAddrLower ? Array.from(adjacency[fromAddrLower] || []) : [];
+    const connectedTokens = connectedAddrs
+      .map(addr => allTokens.find(t => t.address.toLowerCase() === addr))
+      .filter(Boolean) as Token[];
+    const stableConnected = connectedTokens.find(t => STABLE.has(t.symbol) && t.address.toLowerCase() !== fromAddrLower);
+    if (stableConnected) return stableConnected;
+    const anyConnected = connectedTokens.find(t => t.address.toLowerCase() !== fromAddrLower);
+    if (anyConnected) return anyConnected;
+    const stableAny = allTokens.find(t => STABLE.has(t.symbol) && t.address.toLowerCase() !== fromAddrLower);
+    if (stableAny) return stableAny;
+    const any = allTokens.find(t => t.address.toLowerCase() !== fromAddrLower);
+    if (any) return any;
+    return DEFAULT_FROM;
+  })();
+
+  // Track if we've applied defaults once
+  const appliedDefaultRef = useRef(false);
+
+
   const allowedToAddresses = baseFrom ? Array.from(adjacency[baseFrom.address?.toLowerCase()] || []) : [];
 
   const pairOptions = pools
@@ -217,6 +222,18 @@ export const PriceChart = ({ fromToken, toToken, onSelectFromToken, onSelectToTo
     });
     return hit?.id;
   })();
+
+  // Auto-apply defaults only when a valid pair exists and tokens differ
+  useEffect(() => {
+    if (haveSelectedPair || appliedDefaultRef.current) return;
+    const f = baseFrom.address?.toLowerCase();
+    const t = baseTo.address?.toLowerCase();
+    if (!f || !t || f === t) return;
+    if (!currentPairId) return; // ensure pair exists
+    onSelectFromToken?.(baseFrom);
+    onSelectToToken?.(baseTo);
+    appliedDefaultRef.current = true;
+  }, [haveSelectedPair, baseFrom.address, baseTo.address, currentPairId, onSelectFromToken, onSelectToToken]);
 
   // Fetch realtime pool price for current pair and derive rate in FROM→TO orientation
   useEffect(() => {
