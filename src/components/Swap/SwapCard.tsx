@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -85,6 +85,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const [isFromInput, setIsFromInput] = useState(true);
   const [mode, setMode] = useState<"swap" | "limit">("swap");
   const [desiredPrice, setDesiredPrice] = useState<string>("");
+  const [userEditedDesired, setUserEditedDesired] = useState<boolean>(false);
   const [limitSide, setLimitSide] = useState<"buy" | "sell">("buy");
   const [sizeAmount, setSizeAmount] = useState<string>("");
   const [limitTTL, setLimitTTL] = useState<number>(3600);
@@ -112,6 +113,10 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     lastUpdated: string;
   } | null>(null);
   const [loadingRealtimePrice, setLoadingRealtimePrice] = useState(false);
+
+  // Deduplicate quote requests & track last pair used for market price
+  const lastQuoteKeyRef = useRef<string>("");
+  const lastDesiredPairKeyRef = useRef<string>("");
 
 
   // Load pools to build token universe and adjacency mapping
@@ -348,12 +353,41 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     return exchangeRate;
   })();
 
+  // Limit mode mid rate oriented to principal → quote, independent of Swap input orientation
+  const limitBaseRate = (() => {
+    if (!principalToken || !quoteToken) return null;
+    // Prefer realtime pool price orientation
+    if (realtimePrice && selectedPoolId) {
+      const pool = pools.find((p) => p.id === selectedPoolId);
+      if (pool) {
+        const isPrincipalToken0 = principalToken.address.toLowerCase() === pool.token0?.id?.toLowerCase();
+        const rate = isPrincipalToken0 ? realtimePrice.price : realtimePrice.inversePrice;
+        if (Number.isFinite(rate) && rate > 0) return rate;
+      }
+    }
+    // Fallback: use baseRate but orient by principal
+    if (Number.isFinite(baseRate) && (baseRate as number) > 0) {
+      const oriented = principalToken.address.toLowerCase() === fromToken?.address?.toLowerCase()
+        ? (baseRate as number)
+        : (1 / (baseRate as number));
+      if (Number.isFinite(oriented) && oriented > 0) return oriented;
+    }
+    // Fallback: Coingecko ratio principal/quote if available
+    if (prices && principalToken.coingeckoId && quoteToken.coingeckoId) {
+      const p = prices[principalToken.coingeckoId]?.usd;
+      const q = prices[quoteToken.coingeckoId]?.usd;
+      if (Number.isFinite(p) && Number.isFinite(q) && q > 0) return p / q;
+    }
+    return null;
+  })();
+
   const fetchMarketRate = async (): Promise<number | null> => {
-    const rateCandidate = Number(exchangeRate);
-    if (Number.isFinite(rateCandidate) && rateCandidate > 0) return rateCandidate;
-    if (!publicClient || !currentNetwork || !fromToken || !toToken) return null;
-    const fromAddr = fromToken.address as `0x${string}`;
-    const toAddr = toToken.address as `0x${string}`;
+    // Prefer limitBaseRate (principal → quote)
+    const oriented = Number(limitBaseRate);
+    if (Number.isFinite(oriented) && oriented > 0) return oriented;
+    if (!publicClient || !currentNetwork || !principalToken || !quoteToken) return null;
+    const fromAddr = principalToken.address as `0x${string}`;
+    const toAddr = quoteToken.address as `0x${string}`;
     const selected = selectedPoolId ? liquidPools.find((c) => c.id === selectedPoolId) : undefined;
     const tickSpacing = selected?.tickSpacing ?? liquidPools[0]?.tickSpacing ?? undefined;
     const feeTier = selected?.fee ?? liquidPools[0]?.fee ?? undefined;
@@ -403,8 +437,8 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         const tick = Number(top.tick);
         const ratio = Math.pow(1.0001, tick) * Math.pow(10, d0 - d1); // token1 per token0
         const a0 = top.token0?.id?.toLowerCase();
-        const isFromToken0 = a0 === fromAddr.toLowerCase();
-        const rate = isFromToken0 ? ratio : (1 / ratio);
+        const isPrincipalToken0 = a0 === fromAddr.toLowerCase();
+        const rate = isPrincipalToken0 ? ratio : (1 / ratio);
         if (Number.isFinite(rate) && rate > 0) return rate;
       }
     } catch (e) {
@@ -418,6 +452,9 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     if (Number.isFinite(mr) && (mr as number) > 0) {
       setDesiredPrice(String(mr));
       setActiveDesired('market');
+      setUserEditedDesired(false);
+      const key = `${principalToken?.address}-${quoteToken?.address}`;
+      lastDesiredPairKeyRef.current = key;
     }
   };
 
@@ -425,7 +462,7 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
     const mr = await fetchMarketRate();
     const base = Number.isFinite(mr) && (mr as number) > 0
       ? (mr as number)
-      : (Number.isFinite(exchangeRate) && exchangeRate > 0 ? exchangeRate : NaN);
+      : (Number.isFinite(limitBaseRate) && (limitBaseRate as number) > 0 ? (limitBaseRate as number) : NaN);
     if (!Number.isFinite(base) || base <= 0) return;
     const next = base * (1 + percentDelta / 100);
     setDesiredPrice(String(next));
@@ -470,17 +507,24 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   }, [desiredPrice, fromToken?.address, toToken?.address, baseRate]);
 
   useEffect(() => {
-    if (mode === "limit" && !desiredPrice && baseRate && Number.isFinite(baseRate) && baseRate > 0) {
-      setDesiredPrice(String(baseRate));
+    if (mode !== "limit") return;
+    if (!desiredPrice && limitBaseRate && Number.isFinite(limitBaseRate) && (limitBaseRate as number) > 0 && !userEditedDesired) {
+      setDesiredPrice(String(limitBaseRate as number));
+      setActiveDesired('market');
     }
-  }, [mode, baseRate]);
+  }, [mode, limitBaseRate, desiredPrice, userEditedDesired]);
 
   useEffect(() => {
     if (mode !== "limit") return;
-    if (activeDesired === 'market' && baseRate && Number.isFinite(baseRate) && baseRate > 0) {
-      setDesiredPrice(String(baseRate));
+    const key = `${principalToken?.address}-${quoteToken?.address}`;
+    const hasRate = Number.isFinite(limitBaseRate as number) && (limitBaseRate as number) > 0;
+    if (!hasRate) return;
+    if (!userEditedDesired && (lastDesiredPairKeyRef.current !== key || !desiredPrice)) {
+      setDesiredPrice(String(limitBaseRate as number));
+      setActiveDesired('market');
+      lastDesiredPairKeyRef.current = key;
     }
-  }, [fromToken?.address, toToken?.address, activeDesired, baseRate, mode]);
+  }, [mode, principalToken?.address, quoteToken?.address, limitBaseRate, userEditedDesired, desiredPrice]);
 
   useEffect(() => {
     if (mode === "limit") {
@@ -674,12 +718,15 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
         console.groupEnd();
       }
     };
-
+    // Deduplicate identical quote requests
+    const key = `${currentNetwork?.chainId}-${fromToken?.address}-${toToken?.address}-${isFromInput}-${fromAmount}-${toAmount}`;
     const timeout = setTimeout(() => {
+      if (lastQuoteKeyRef.current === key) return;
+      lastQuoteKeyRef.current = key;
       runQuote();
     }, 300);
     return () => clearTimeout(timeout);
-  }, [publicClient, currentNetwork, pools, fromToken, toToken, isFromInput, fromAmount, toAmount, exchangeRate, desiredPrice]);
+  }, [publicClient, currentNetwork?.chainId, selectedPoolId, fromToken?.address, toToken?.address, isFromInput, fromAmount, toAmount, exchangeRate]);
 
   useEffect(() => {
     if (mode !== "limit") return;
@@ -917,6 +964,8 @@ export const SwapCard = ({ onTokensChange, initialFromAddress, initialToAddress,
   const handleDesiredPriceChange = (value: string) => {
     const sanitized = sanitizeDecimalInput(value);
     setDesiredPrice(sanitized);
+    setActiveDesired(null);
+    setUserEditedDesired(true);
   };
 
   const handleSizeAmountChange = (value: string) => {
